@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Mbare Chitekete Canteen</string>
+    <string name="title_activity_main">Mbare Chitekete Canteen</string>
+    <string name="package_name">com.mbarechitekete.canteen</string>
+    <string name="custom_url_scheme">com.mbarechitekete.canteen</string>
+</resources>
