@@ -5,11 +5,10 @@ import { useCurrency } from './CurrencyContext'
 import {
   RefreshCw,
   Search,
-  AlertTriangle,
-  CheckCircle2,
   Plus,
   X,
-  History
+  History,
+  Image as ImageIcon
 } from 'lucide-react'
 
 const panel = {
@@ -67,6 +66,51 @@ const emptyForm = () => ({
   adjustment_date: today()
 })
 
+function ProductImage({ item, size = 48 }) {
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    setFailed(false)
+  }, [item.image_url])
+
+  const imageStyle = {
+    width: size,
+    height: size,
+    minWidth: size,
+    borderRadius: 9,
+    objectFit: 'cover',
+    background: '#f1f5f3',
+    border: '1px solid #e7edf2',
+    display: 'block'
+  }
+
+  if (!item.image_url || failed) {
+    return (
+      <div
+        title="No product image"
+        style={{
+          ...imageStyle,
+          display: 'grid',
+          placeItems: 'center',
+          color: '#91a39a'
+        }}
+      >
+        <ImageIcon size={size * 0.38} />
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={item.image_url}
+      alt={item.name}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      style={imageStyle}
+    />
+  )
+}
+
 export default function Inventory() {
   const { formatCurrency } = useCurrency()
 
@@ -103,6 +147,7 @@ export default function Inventory() {
         .select(`
           id,
           name,
+          image_url,
           unit,
           selling_price,
           current_quantity,
@@ -175,7 +220,6 @@ export default function Inventory() {
     setMessage('')
     setShowForm(true)
 
-    // Bring the form into view when opened on a phone.
     setTimeout(() => {
       document.getElementById('inventory-adjustment-form')
         ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -501,6 +545,87 @@ export default function Inventory() {
           overflow-wrap: anywhere;
         }
 
+        .inventory-product-image-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .inventory-product-image-row > div {
+          min-width: 0;
+        }
+
+        .inventory-card-heading {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .inventory-card-category {
+          color: #718096;
+          font-size: 11px;
+          margin-top: 4px;
+        }
+
+        .inventory-card-stock {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+          margin-top: 10px;
+          padding: 9px 0;
+          border-top: 1px solid #edf0f2;
+          border-bottom: 1px solid #edf0f2;
+        }
+
+        .inventory-card-stock span {
+          display: block;
+          font-size: 10px;
+          color: #718096;
+        }
+
+        .inventory-card-stock strong {
+          display: block;
+          margin-top: 3px;
+          font-size: 13px;
+        }
+
+        .inventory-card-footer {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+          margin-top: 9px;
+          font-size: 12px;
+        }
+
+        .inventory-card-footer button {
+          border: 0;
+          border-radius: 7px;
+          background: #28785f;
+          color: #fff;
+          padding: 8px 11px;
+          cursor: pointer;
+        }
+
+        .inventory-low {
+          color: #b45309;
+          font-size: 11px;
+        }
+
+        .inventory-healthy {
+          color: #28785f;
+          font-size: 11px;
+        }
+
+        .inventory-empty {
+          color: #718096;
+          text-align: center;
+          padding: 20px;
+          font-size: 13px;
+        }
+
         @media (max-width: 640px) {
           .inventory-heading {
             align-items: stretch;
@@ -558,12 +683,18 @@ export default function Inventory() {
             display: none;
           }
 
-          .inventory-mobile-list {
+          .inventory-mobile-grid {
             display: block;
           }
 
           .inventory-form {
             max-width: none;
+          }
+        }
+
+        @media (min-width: 641px) {
+          .inventory-mobile-grid {
+            display: none;
           }
         }
 
@@ -590,7 +721,6 @@ export default function Inventory() {
         }
       `}</style>
 
-      {/* PAGE HEADING */}
       <div className="inventory-heading">
         <div>
           <div className="eyebrow">STOCK CONTROL</div>
@@ -614,7 +744,6 @@ export default function Inventory() {
       {error && <div className="alert alert-error">{error}</div>}
       {message && <div className="alert alert-success">{message}</div>}
 
-      {/* SUMMARY */}
       <div className="inventory-stats">
         <div className="inventory-stat">
           <span>Stock items</span>
@@ -637,7 +766,6 @@ export default function Inventory() {
         </div>
       </div>
 
-      {/* ADJUSTMENT FORM - NOW ABOVE ALL PRODUCTS */}
       {showForm && (
         <section
           id="inventory-adjustment-form"
@@ -791,7 +919,6 @@ export default function Inventory() {
         </section>
       )}
 
-      {/* INVENTORY PRODUCTS */}
       <section style={panel}>
         <div className="inventory-toolbar">
           <div className="inventory-search">
@@ -837,13 +964,13 @@ export default function Inventory() {
             <span style={{ marginLeft: 4 }}>History</span>
           </button>
         </div>
+
         {loading ? (
           <p>Loading product stock...</p>
         ) : (
           <>
-            {/* Desktop and tablet table */}
             <div className="inventory-table-wrap">
-              <table className="data-table">
+              <table className="data-table inventory-table">
                 <thead>
                   <tr>
                     <th>Product</th>
@@ -863,11 +990,17 @@ export default function Inventory() {
                     return (
                       <tr key={item.id}>
                         <td>
-                          <strong>{item.name}</strong>
-                          <div style={{ fontSize: 11, color: '#718096' }}>
-                            {item.unit} · {formatCurrency(Number(item.selling_price || 0))}
+                          <div className="inventory-product-image-row">
+                            <ProductImage item={item} size={48} />
+                            <div>
+                              <strong>{item.name}</strong>
+                              <div style={{ fontSize: 11, color: '#718096' }}>
+                                {item.unit} · {formatCurrency(Number(item.selling_price || 0))}
+                              </div>
+                            </div>
                           </div>
                         </td>
+
                         <td>{item.menu_categories?.name || 'Uncategorised'}</td>
                         <td>{qty.toLocaleString()} {item.unit}</td>
                         <td>
@@ -876,6 +1009,7 @@ export default function Inventory() {
                         <td>{low ? '⚠ Low stock' : '✓ In stock'}</td>
                         <td>
                           <button
+                            type="button"
                             style={{ ...button, padding: '6px 9px' }}
                             onClick={() => openAdjustment(item)}
                           >
@@ -889,7 +1023,6 @@ export default function Inventory() {
               </table>
             </div>
 
-            {/* Compact Android product cards */}
             <div className="inventory-mobile-grid">
               {filtered.map(item => {
                 const qty = Number(item.current_quantity || 0)
@@ -897,27 +1030,34 @@ export default function Inventory() {
 
                 return (
                   <article className="inventory-product-card" key={item.id}>
-                    <div className="inventory-card-heading">
-                      <strong>{item.name}</strong>
+                    <div className="inventory-product-top">
+                      <div className="inventory-product-image-row">
+                        <ProductImage item={item} size={62} />
+                        <div>
+                          <div className="inventory-product-name">
+                            {item.name}
+                          </div>
+                          <div className="inventory-product-category">
+                            {item.menu_categories?.name || 'Uncategorised'} · {item.unit}
+                          </div>
+                        </div>
+                      </div>
+
                       <span className={low ? 'inventory-low' : 'inventory-healthy'}>
                         {low ? '⚠ Low' : '✓ OK'}
                       </span>
                     </div>
 
-                    <div className="inventory-card-category">
-                      {item.menu_categories?.name || 'Uncategorised'} · {item.unit}
-                    </div>
-
                     <div className="inventory-card-stock">
                       <div>
                         <span>Available</span>
-                        <strong>{qty.toLocaleString()}</strong>
+                        <strong>{qty.toLocaleString()} {item.unit}</strong>
                       </div>
 
                       <div>
                         <span>Reorder level</span>
                         <strong>
-                          {Number(item.minimum_quantity || 0).toLocaleString()}
+                          {Number(item.minimum_quantity || 0).toLocaleString()} {item.unit}
                         </strong>
                       </div>
                     </div>
@@ -948,7 +1088,6 @@ export default function Inventory() {
         )}
       </section>
 
-      {/* STOCK ADJUSTMENT HISTORY */}
       {historyOpen && (
         <section style={panel}>
           <div style={{

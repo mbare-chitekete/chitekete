@@ -1,3 +1,4 @@
+
 import { useEffect, useRef, useState } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { EscPosPrinter } from '@fedejm/capacitor-esc-pos-printer'
@@ -15,36 +16,176 @@ import {
 import { supabase } from './supabase'
 import { useCurrency } from './CurrencyContext'
 
+const SUPPORTED_CURRENCIES = ['USD', 'ZAR', 'ZWG']
 
+const CURRENCY_SYMBOLS = {
+    USD: '$',
+    ZAR: 'R',
+    ZWG: 'ZiG'
+}
 
-export default function CashierPOS({ businessName, ownerEmail }) {
-    const { formatCurrency } = useCurrency()
+function roundMoney(value) {
+    return Math.round((Number(value) + Number.EPSILON) * 100) / 100
+}
+
+export default function CashierPOS({ businessName }) {
+
+    const [currentDate, setCurrentDate] = useState(() => new Date())
+    function formatZimbabweTime(date) {
+        return new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'Africa/Harare',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hourCycle: 'h23'
+        }).format(date)
+    }
+
+    function formatZimbabweDate(date) {
+        return new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'Africa/Harare',
+            weekday: 'long',
+            day: '2-digit',
+            month: 'long',
+            year: 'numeric'
+        }).format(date)
+    }
+
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setCurrentDate(new Date())
+        }, 1000)
+
+        return () => clearInterval(timer)
+    }, [])
+    const { currencyCode: contextCurrency = 'USD' } = useCurrency()
+
+    const [settingsCurrency, setSettingsCurrency] = useState(
+        SUPPORTED_CURRENCIES.includes(contextCurrency)
+            ? contextCurrency
+            : 'USD'
+    )
+
+    const [exchangeRates, setExchangeRates] = useState({ USD: 1 })
+    const [settingsLoaded, setSettingsLoaded] = useState(false)
+
+    const [saleCurrencyCode, setSaleCurrencyCode] = useState(
+        SUPPORTED_CURRENCIES.includes(contextCurrency)
+            ? contextCurrency
+            : 'USD'
+    )
+
+    const [savedBusinessName, setSavedBusinessName] = useState(
+        businessName || ''
+    )
+    function formatMoney(value, code = 'USD') {
+        const numericValue = Number(value)
+
+        if (!Number.isFinite(numericValue)) {
+            return 'Rate unavailable'
+        }
+
+        const symbol = CURRENCY_SYMBOLS[code] || `${code} `
+
+        return `${symbol}${new Intl.NumberFormat('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(numericValue)}`
+    }
+
+    const displayBusinessName =
+        savedBusinessName.trim() ||
+        businessName?.trim() ||
+        'CANTEEN'
 
     const [menuItems, setMenuItems] = useState([])
     const [categories, setCategories] = useState([])
     const [cart, setCart] = useState([])
     const [search, setSearch] = useState('')
     const [activeCategory, setActiveCategory] = useState('All')
+
     const [paymentMethod, setPaymentMethod] = useState('cash')
     const [amountPaid, setAmountPaid] = useState('')
+
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [processing, setProcessing] = useState(false)
+
     const checkoutRequestId = useRef(null)
+
     const [successMessage, setSuccessMessage] = useState('')
     const [lastReceipt, setLastReceipt] = useState(null)
     const [receiptDetails, setReceiptDetails] = useState([])
     const [loadingReceipt, setLoadingReceipt] = useState(false)
+
     const [salesHistory, setSalesHistory] = useState([])
     const [loadingHistory, setLoadingHistory] = useState(false)
+
     const [printerType, setPrinterType] = useState('bluetooth')
     const [printerDevices, setPrinterDevices] = useState([])
     const [selectedPrinterAddress, setSelectedPrinterAddress] = useState('')
     const [printerHashKey, setPrinterHashKey] = useState('')
+    const printerHashKeyRef = useRef('')
+
     const [printerConnected, setPrinterConnected] = useState(false)
     const [printerLoading, setPrinterLoading] = useState(false)
     const [printerError, setPrinterError] = useState('')
     const [printerMessage, setPrinterMessage] = useState('')
+
+    // =========================================================
+    // CENTRAL CURRENCY CONFIGURATION
+    // =========================================================
+
+    const baseCurrencyRate = Number(exchangeRates[settingsCurrency])
+    const selectedCurrencyRate = Number(exchangeRates[saleCurrencyCode])
+
+    const baseRateValid =
+        Number.isFinite(baseCurrencyRate) && baseCurrencyRate > 0
+
+    const saleRateValid =
+        Number.isFinite(selectedCurrencyRate) && selectedCurrencyRate > 0
+
+    const fxConfigurationValid =
+        settingsLoaded &&
+        baseRateValid &&
+        saleRateValid
+
+
+    function convertedMenuPrice(item) {
+        if (!fxConfigurationValid) return NaN
+
+        const originalPrice = Number(item.selling_price)
+
+        if (!Number.isFinite(originalPrice)) return NaN
+
+        return roundMoney(
+            originalPrice * baseCurrencyRate / selectedCurrencyRate
+        )
+    }
+
+    function getLineTotal(item) {
+        const unitPrice = convertedMenuPrice(item)
+
+        if (!Number.isFinite(unitPrice)) return NaN
+
+        return roundMoney(Number(item.quantity) * unitPrice)
+    }
+
+    const total = roundMoney(
+        cart.reduce((sum, item) => {
+            const lineTotal = getLineTotal(item)
+
+            return sum + (Number.isFinite(lineTotal) ? lineTotal : 0)
+        }, 0)
+    )
+
+    const missingSaleCurrencyRate =
+        settingsLoaded && !saleRateValid
+
+    // =========================================================
+    // PRINTER DISCOVERY
+    // =========================================================
+
     async function discoverPrinters() {
         setPrinterLoading(true)
         setPrinterError('')
@@ -54,32 +195,48 @@ export default function CashierPOS({ businessName, ownerEmail }) {
 
         try {
             if (!Capacitor.isNativePlatform()) {
-                throw new Error('Thermal printer discovery is available in the Android app, not the web browser.')
+                setPrinterMessage(
+                    'Bluetooth and USB printer discovery is available in the Android app. Use Print Receipt to print from your browser.'
+                )
+                return
             }
 
             if (printerType === 'bluetooth') {
-                const enableResult = await EscPosPrinter.requestBluetoothEnable()
+                const enableResult =
+                    await EscPosPrinter.requestBluetoothEnable()
 
                 if (!enableResult.value) {
-                    throw new Error('Please enable Bluetooth to find printers.')
+                    throw new Error(
+                        'Please enable Bluetooth to find printers.'
+                    )
                 }
 
-                const result = await EscPosPrinter.getBluetoothPrinterDevices()
+                const result =
+                    await EscPosPrinter.getBluetoothPrinterDevices()
+
                 setPrinterDevices(result.devices || [])
 
                 if (!result.devices?.length) {
-                    setPrinterMessage('No paired printer devices found. Pair your printer in Android Bluetooth settings first.')
+                    setPrinterMessage(
+                        'No paired printer devices found. Pair your printer in Android Bluetooth settings first.'
+                    )
                 }
             } else {
-                const result = await EscPosPrinter.getUsbPrinterDevices()
+                const result =
+                    await EscPosPrinter.getUsbPrinterDevices()
+
                 setPrinterDevices(result.devices || [])
 
                 if (!result.devices?.length) {
-                    setPrinterMessage('No compatible USB printer found. Connect the printer to the Android device.')
+                    setPrinterMessage(
+                        'No compatible USB printer found. Connect the printer to the Android device.'
+                    )
                 }
             }
         } catch (err) {
-            setPrinterError(err.message || 'Could not discover printers.')
+            setPrinterError(
+                err.message || 'Could not discover printers.'
+            )
         } finally {
             setPrinterLoading(false)
         }
@@ -92,6 +249,11 @@ export default function CashierPOS({ businessName, ownerEmail }) {
         setPrinterError('')
         setPrinterMessage('')
     }
+
+    // =========================================================
+    // PRINTER CONNECTION
+    // =========================================================
+
     async function connectPrinter() {
         if (!selectedPrinterAddress) {
             setPrinterError('Please select a printer first.')
@@ -106,12 +268,15 @@ export default function CashierPOS({ businessName, ownerEmail }) {
 
         try {
             if (printerType === 'usb') {
-                const permission = await EscPosPrinter.requestUsbPermission({
-                    address: selectedPrinterAddress
-                })
+                const permission =
+                    await EscPosPrinter.requestUsbPermission({
+                        address: selectedPrinterAddress
+                    })
 
                 if (!permission.value) {
-                    throw new Error('USB printer permission was not granted.')
+                    throw new Error(
+                        'USB printer permission was not granted.'
+                    )
                 }
             }
 
@@ -123,7 +288,9 @@ export default function CashierPOS({ businessName, ownerEmail }) {
             newHashKey = result.value
 
             if (!newHashKey) {
-                throw new Error('Could not create the printer connection.')
+                throw new Error(
+                    'Could not create the printer connection.'
+                )
             }
 
             await EscPosPrinter.connectPrinter({
@@ -131,6 +298,7 @@ export default function CashierPOS({ businessName, ownerEmail }) {
             })
 
             setPrinterHashKey(newHashKey)
+            printerHashKeyRef.current = newHashKey
             setPrinterConnected(true)
             setPrinterMessage('Printer connected successfully.')
         } catch (err) {
@@ -140,17 +308,24 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                         hashKey: newHashKey
                     })
                 } catch (disposeError) {
-                    console.error('Printer cleanup failed:', disposeError)
+                    console.error(
+                        'Printer cleanup failed:',
+                        disposeError
+                    )
                 }
             }
 
             setPrinterHashKey('')
             setPrinterConnected(false)
-            setPrinterError(err.message || 'Could not connect to the printer.')
+
+            setPrinterError(
+                err.message || 'Could not connect to the printer.'
+            )
         } finally {
             setPrinterLoading(false)
         }
     }
+
     async function disconnectPrinter() {
         if (!printerHashKey) return
 
@@ -158,26 +333,34 @@ export default function CashierPOS({ businessName, ownerEmail }) {
         setPrinterError('')
         setPrinterMessage('Disconnecting printer...')
 
+        const hashKey = printerHashKey
+
         try {
-            // Changing printerHashKey triggers the cleanup useEffect,
-            // which disconnects and disposes the native printer connection.
+            await EscPosPrinter.disconnectPrinter({ hashKey })
+            await EscPosPrinter.disposePrinter({ hashKey })
+
+            printerHashKeyRef.current = ''
+
             setPrinterHashKey('')
             setPrinterConnected(false)
             setSelectedPrinterAddress('')
-            setPrinterMessage('Printer disconnected.')
+            setPrinterMessage('Printer disconnected successfully.')
         } catch (err) {
-            setPrinterError(err.message || 'Could not disconnect the printer.')
+            setPrinterError(
+                err.message || 'Could not disconnect the printer.'
+            )
         } finally {
             setPrinterLoading(false)
         }
     }
-    function textToPrinterBytes(text) {
-        return Array.from(new TextEncoder().encode(text))
-    }
+
+    // =========================================================
+    // PRINTER TEST
+    // =========================================================
 
     async function testPrinter() {
         if (!printerConnected || !printerHashKey) {
-            setPrinterError('Connect a printer before running a test print.')
+            setPrinterError('Please connect a printer first.')
             return
         }
 
@@ -186,17 +369,20 @@ export default function CashierPOS({ businessName, ownerEmail }) {
         setPrinterMessage('')
 
         try {
-            const testText =
-                '\x1B\x40' +
-                '\x1B\x61\x01' +
-                '\x1B\x45\x01' +
-                'MBARE CHITEKETE\n' +
-                '\x1B\x45\x00' +
-                'PRINTER TEST\n' +
-                '------------------------------\n' +
-                'Printer connection successful.\n' +
-                'Your POS printer is ready.\n\n\n' +
+            const testText = [
+                '\x1B\x40',
+                '\x1B\x61\x01',
+                '\x1B\x45\x01',
+                displayBusinessName,
+                '\x1B\x45\x00',
+                'PRINTER TEST',
+                '\n',
+                '\x1B\x61\x00',
+                'Printer connection successful.',
+                'Test print completed.',
+                '\n\n\n',
                 '\x1D\x56\x00'
+            ].join('\n')
 
             await EscPosPrinter.sendToPrinter({
                 hashKey: printerHashKey,
@@ -204,27 +390,129 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                 waitingTime: 3000
             })
 
-            setPrinterMessage('Test receipt sent to the printer.')
+            setPrinterMessage(
+                'Test receipt printed successfully.'
+            )
         } catch (err) {
-            setPrinterError(err.message || 'Test print failed.')
+            setPrinterError(
+                err.message || 'Printer test failed.'
+            )
         } finally {
             setPrinterLoading(false)
         }
     }
+
+    function textToPrinterBytes(text) {
+        return Array.from(new TextEncoder().encode(text))
+    }
+
+    // =========================================================
+    // RECEIPT PRINTING
+    // =========================================================
+
+    function buildReceiptPrintText(items, receipt) {
+        const width = 32
+        const line = '-'.repeat(width)
+
+        const center = text =>
+            text.length >= width
+                ? text.slice(0, width)
+                : ' '.repeat(
+                    Math.floor((width - text.length) / 2)
+                ) + text
+
+        const date = new Date(receipt.sale_datetime)
+
+        const dateText = date.toLocaleDateString('en-GB', {
+            timeZone: 'Africa/Harare'
+        })
+
+        const timeText = date.toLocaleTimeString('en-GB', {
+            timeZone: 'Africa/Harare',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        })
+
+        const receiptCurrency =
+            receipt.currency_code || 'USD'
+
+        const rows = [
+            '\x1B\x40',
+            '\x1B\x61\x01',
+            '\x1B\x45\x01',
+            displayBusinessName,
+            '\x1B\x45\x00',
+            'SALES RECEIPT',
+            '\n',
+            '\x1B\x61\x00',
+            `Receipt No: ${receipt.receipt_number}`,
+            `Date: ${dateText}`,
+            `Time: ${timeText}`,
+            `Cashier: ${receipt.cashier_name || 'Cashier'}`,
+            line,
+            'Description',
+            'QTY       Unit price     Amount',
+            line
+        ]
+
+        items.forEach(item => {
+            const quantity = Number(item.quantity || 0)
+
+            const unitPrice = formatMoney(
+                item.unit_price,
+                receiptCurrency
+            )
+
+            const amount = formatMoney(
+                item.line_total,
+                receiptCurrency
+            )
+
+            rows.push(
+                String(item.item_name || 'Item'),
+                `${quantity}  ${unitPrice}  ${amount}`
+            )
+        })
+
+        rows.push(
+            line,
+            '\x1B\x45\x01',
+            `TOTAL: ${formatMoney(receipt.total_amount, receiptCurrency)}`,
+            '\x1B\x45\x00',
+            line,
+            `Payment method: ${(receipt.payment_method || '').replace('_', ' ')}`,
+            `Amount paid: ${formatMoney(receipt.amount_paid, receiptCurrency)}`,
+            `Change: ${formatMoney(receipt.change_amount, receiptCurrency)}`,
+            '\n',
+            center('THANK YOU FOR YOUR PURCHASE!'),
+            center('We appreciate your support.'),
+            '\n\n\n',
+            '\x1D\x56\x00'
+        )
+
+        return rows.join('\n')
+    }
+
     async function printReceipt() {
         if (!receiptDetails.length || !lastReceipt) {
             setError('Receipt details are not available.')
             return
         }
 
-        // Use normal browser printing when running outside Android.
         if (!Capacitor.isNativePlatform()) {
+            setPrinterMessage(
+                'Bluetooth and USB printer discovery is available in the Android app. Use Print Receipt to print from your browser.'
+            )
+
             window.print()
             return
         }
 
         if (!printerConnected || !printerHashKey) {
-            setError('Please connect a thermal printer before printing.')
+            setError(
+                'Please connect a thermal printer before printing.'
+            )
             return
         }
 
@@ -234,66 +522,14 @@ export default function CashierPOS({ businessName, ownerEmail }) {
 
         try {
             const receipt = receiptDetails[0]
-            const width = 32
 
-            const center = text =>
-                text.length >= width
-                    ? text.slice(0, width)
-                    : ' '.repeat(Math.floor((width - text.length) / 2)) + text
-
-            const line = '-'.repeat(width)
-
-            const leftRight = (left, right) => {
-                const available = Math.max(1, width - left.length - right.length)
-                return left + ' '.repeat(available) + right
-            }
-
-            const dateText = new Date(receipt.sale_datetime).toLocaleString(
-                'en-GB',
-                { timeZone: 'Africa/Harare' }
+            const receiptText = buildReceiptPrintText(
+                receiptDetails,
+                {
+                    ...receipt,
+                    receipt_number: lastReceipt.receipt_number
+                }
             )
-
-            const rows = [
-                '\x1B\x40',
-                '\x1B\x61\x01',
-                '\x1B\x45\x01',
-                businessName || 'MBARE CHITEKETE CANTEEN',
-                '\x1B\x45\x00',
-                'SALES RECEIPT',
-                '\n',
-                '\x1B\x61\x00',
-                `Receipt: ${lastReceipt.receipt_number}`,
-                `Date: ${dateText}`,
-                `Cashier: ${receipt.cashier_name || 'Cashier'}`,
-                line
-            ]
-
-            receiptDetails.forEach(item => {
-                rows.push(item.item_name)
-                rows.push(
-                    leftRight(
-                        `${item.quantity} x ${formatCurrency(item.unit_price)}`,
-                        formatCurrency(item.line_total)
-                    )
-                )
-            })
-
-            rows.push(
-                line,
-                '\x1B\x45\x01',
-                leftRight('TOTAL', formatCurrency(receipt.total_amount)),
-                '\x1B\x45\x00',
-                line,
-                `Payment: ${receipt.payment_method.replace('_', ' ')}`,
-                `Paid: ${formatCurrency(receipt.amount_paid)}`,
-                `Change: ${formatCurrency(receipt.change_amount)}`,
-                '\n',
-                center('Thank you for your purchase!'),
-                '\n\n\n',
-                '\x1D\x56\x00'
-            )
-
-            const receiptText = rows.join('\n')
 
             await EscPosPrinter.sendToPrinter({
                 hashKey: printerHashKey,
@@ -301,76 +537,116 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                 waitingTime: 3000
             })
 
-            setPrinterMessage(`Receipt ${lastReceipt.receipt_number} printed successfully.`)
+            setPrinterMessage(
+                `Receipt ${lastReceipt.receipt_number} printed successfully.`
+            )
         } catch (err) {
-            setPrinterError(err.message || 'Could not print the receipt.')
+            setPrinterError(
+                err.message || 'Could not print the receipt.'
+            )
         } finally {
             setPrinterLoading(false)
         }
     }
+
+    // =========================================================
+    // INITIAL LOAD AND PRINTER CLEANUP
+    // =========================================================
+
     useEffect(() => {
         loadMenu()
         loadSalesHistory()
+        loadBusinessName()
     }, [])
+
     useEffect(() => {
         return () => {
-            if (printerHashKey) {
-                EscPosPrinter.disconnectPrinter({
-                    hashKey: printerHashKey
-                }).catch(err => {
-                    console.error('Printer disconnect on POS exit failed:', err)
-                }).finally(() => {
-                    EscPosPrinter.disposePrinter({
-                        hashKey: printerHashKey
-                    }).catch(err => {
-                        console.error('Printer cleanup on POS exit failed:', err)
+            const hashKey = printerHashKeyRef.current
+
+            if (!hashKey) return
+
+            const cleanupPrinter = async () => {
+                try {
+                    await EscPosPrinter.disconnectPrinter({
+                        hashKey
                     })
-                })
+                } catch (err) {
+                    console.error(
+                        'Printer disconnect failed:',
+                        err
+                    )
+                }
+
+                try {
+                    await EscPosPrinter.disposePrinter({
+                        hashKey
+                    })
+                } catch (err) {
+                    console.error(
+                        'Printer disposal failed:',
+                        err
+                    )
+                }
             }
+
+            cleanupPrinter()
         }
-    }, [printerHashKey])
+    }, [])
+
+    // =========================================================
+    // LOAD POS MENU AND SHARED STOCK
+    // =========================================================
+
     async function loadMenu() {
         setLoading(true)
         setError('')
 
         try {
-            // Fetch POS products and mappings independently.
             const [
                 { data: menuData, error: menuError },
                 { data: mappingData, error: mappingError }
             ] = await Promise.all([
-                supabase.rpc('cashier_retail_pos_menu'),
+                supabase.rpc(
+                    'cashier_retail_pos_menu_with_images'
+                ),
                 supabase
                     .from('menu_item_stock_mappings')
-                    .select('sellable_menu_item_id, stock_menu_item_id, quantity_per_sale')
+                    .select(
+                        'sellable_menu_item_id, stock_menu_item_id, quantity_per_sale'
+                    )
             ])
 
             if (menuError) throw menuError
             if (mappingError) throw mappingError
 
             const mappings = mappingData || []
+
             const visibleMenuIds = new Set(
                 (menuData || []).map(item => item.menu_item_id)
             )
 
-            // Keep only mappings belonging to visible POS products.
             const relevantMappings = mappings.filter(mapping =>
                 visibleMenuIds.has(mapping.sellable_menu_item_id)
             )
 
             const stockItemIds = [
                 ...new Set(
-                    relevantMappings.map(mapping => mapping.stock_menu_item_id)
+                    relevantMappings.map(
+                        mapping => mapping.stock_menu_item_id
+                    )
                 )
             ]
 
             let stockItems = []
 
             if (stockItemIds.length > 0) {
-                const { data, error: stockError } = await supabase
-                    .from('menu_items')
-                    .select('id, name, current_quantity, active')
-                    .in('id', stockItemIds)
+                const { data, error: stockError } =
+                    await supabase
+                        .from('menu_items')
+                        .select(
+                            'id, name, current_quantity, active'
+                        )
+                        .in('id', stockItemIds)
 
                 if (stockError) throw stockError
 
@@ -389,15 +665,21 @@ export default function CashierPOS({ businessName, ownerEmail }) {
             )
 
             const enrichedMenu = (menuData || []).map(item => {
-                const mapping = mappingMap.get(item.menu_item_id)
+                const mapping = mappingMap.get(
+                    item.menu_item_id
+                )
 
                 if (mapping) {
-                    const stock = stockMap.get(mapping.stock_menu_item_id)
+                    const stock = stockMap.get(
+                        mapping.stock_menu_item_id
+                    )
 
                     return {
                         ...item,
-                        inventory_stock_item_id: mapping.stock_menu_item_id,
-                        inventory_stock_name: stock?.name || item.item_name,
+                        inventory_stock_item_id:
+                            mapping.stock_menu_item_id,
+                        inventory_stock_name:
+                            stock?.name || item.item_name,
                         inventory_stock_quantity:
                             stock?.current_quantity == null
                                 ? NaN
@@ -406,13 +688,15 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                             stock &&
                             stock.active &&
                             stock.current_quantity != null &&
-                            Number.isFinite(Number(stock.current_quantity))
+                            Number.isFinite(
+                                Number(stock.current_quantity)
+                            )
                         ),
-                        quantity_per_sale: Number(mapping.quantity_per_sale || 1)
+                        quantity_per_sale:
+                            Number(mapping.quantity_per_sale || 1)
                     }
                 }
 
-                // Standalone products continue using their own stock.
                 return {
                     ...item,
                     inventory_stock_item_id: item.menu_item_id,
@@ -423,7 +707,9 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                             : Number(item.current_quantity),
                     inventory_stock_verified:
                         item.current_quantity != null &&
-                        Number.isFinite(Number(item.current_quantity)),
+                        Number.isFinite(
+                            Number(item.current_quantity)
+                        ),
                     quantity_per_sale: 1
                 }
             })
@@ -438,30 +724,129 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                         .filter(Boolean)
                 )
             ])
-
         } catch (err) {
-            console.error('POS menu loading failed:', err)
-            setError(`Could not load POS menu and shared stock: ${err.message}`)
+            console.error(
+                'POS menu loading failed:',
+                err
+            )
+
+            setError(
+                `Could not load POS menu and shared stock: ${err.message}`
+            )
+
             setMenuItems([])
         } finally {
             setLoading(false)
         }
     }
+
+    // =========================================================
+    // LOAD CENTRAL CURRENCY SETTINGS
+    // =========================================================
+
+    async function loadBusinessName() {
+        setSettingsLoaded(false)
+
+        try {
+            const { data, error } = await supabase
+                .from('canteen_settings')
+                .select(
+                    'business_name, currency_code, exchange_rates_to_usd'
+                )
+                .eq('id', true)
+                .maybeSingle()
+
+            if (error) throw error
+
+            if (!data) {
+                throw new Error(
+                    'Canteen settings could not be found.'
+                )
+            }
+
+            if (data.business_name?.trim()) {
+                setSavedBusinessName(
+                    data.business_name.trim()
+                )
+            }
+
+            const configuredCurrency =
+                String(data.currency_code || 'USD').toUpperCase()
+
+            if (
+                !SUPPORTED_CURRENCIES.includes(configuredCurrency)
+            ) {
+                throw new Error(
+                    `Unsupported business currency: ${configuredCurrency}`
+                )
+            }
+
+            const rawRates = data.exchange_rates_to_usd
+
+            if (
+                !rawRates ||
+                typeof rawRates !== 'object' ||
+                Array.isArray(rawRates)
+            ) {
+                throw new Error(
+                    'Central exchange-rate configuration is missing or invalid.'
+                )
+            }
+
+            const cleanedRates = {}
+
+            SUPPORTED_CURRENCIES.forEach(currency => {
+                if (
+                    Object.prototype.hasOwnProperty.call(
+                        rawRates,
+                        currency
+                    )
+                ) {
+                    const rate = Number(rawRates[currency])
+
+                    if (Number.isFinite(rate) && rate > 0) {
+                        cleanedRates[currency] = rate
+                    }
+                }
+            })
+
+            setSettingsCurrency(configuredCurrency)
+            setExchangeRates(cleanedRates)
+            setSaleCurrencyCode(configuredCurrency)
+
+            setSettingsLoaded(true)
+        } catch (err) {
+            console.error(
+                'Business settings loading failed:',
+                err
+            )
+
+            setExchangeRates({})
+            setSettingsLoaded(false)
+
+            setError(
+                `Currency settings could not load: ${err.message}`
+            )
+        }
+    }
+
+    // =========================================================
+    // SALES HISTORY
+    // =========================================================
+
     async function loadSalesHistory() {
         setLoadingHistory(true)
 
         try {
-            // Confirm the current authenticated session.
-            const { data: sessionData, error: sessionError } =
-                await supabase.auth.getSession()
+            const {
+                data: sessionData,
+                error: sessionError
+            } = await supabase.auth.getSession()
 
             if (sessionError) throw sessionError
 
             const session = sessionData?.session
             const cashierId = session?.user?.id
-
-            console.log('POS SESSION:', session)
-            console.log('AUTHENTICATED CASHIER ID:', cashierId)
 
             if (!cashierId) {
                 throw new Error(
@@ -469,31 +854,36 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                 )
             }
 
-            // Fetch saved sales belonging to this cashier.
             const { data, error } = await supabase.rpc(
-                'cashier_pos_sales_history',
+                'cashier_pos_sales_history_v2',
                 { p_limit: 100 }
             )
-
-            console.log('SALES HISTORY RPC ERROR:', error)
-            console.log('SALES HISTORY RPC DATA:', data)
-            console.log('SALES HISTORY COUNT:', data?.length ?? 0)
 
             if (error) throw error
 
             setSalesHistory(data || [])
-
         } catch (err) {
-            console.error('RECENT SALES LOADING FAILED:', err)
+            console.error(
+                'RECENT SALES LOADING FAILED:',
+                err
+            )
+
             setSalesHistory([])
-            setError(`Recent Sales could not load: ${err.message}`)
+
+            setError(
+                `Recent Sales could not load: ${err.message}`
+            )
         } finally {
             setLoadingHistory(false)
         }
     }
 
+    // =========================================================
+    // MENU FILTERING AND STOCK-BASED SORTING
+    // =========================================================
+
     const filteredItems = menuItems.filter(item => {
-        const matchesSearch = item.item_name
+        const matchesSearch = (item.item_name || '')
             .toLowerCase()
             .includes(search.toLowerCase())
 
@@ -504,24 +894,82 @@ export default function CashierPOS({ businessName, ownerEmail }) {
         return matchesSearch && matchesCategory
     })
 
-    const total = cart.reduce(
-        (sum, item) => sum + item.quantity * Number(item.selling_price),
-        0
-    )
+    // Calculate how many complete portions can be sold
+    // using the currently recorded stock quantity.
+    function getAvailableMenuQuantity(item) {
+        if (item.inventory_stock_verified === false) {
+            return -1
+        }
+
+        const stockQuantity = Number(
+            item.inventory_stock_quantity ??
+            item.current_quantity
+        )
+
+        const quantityPerSale = Number(
+            item.quantity_per_sale || 1
+        )
+
+        if (
+            !Number.isFinite(stockQuantity) ||
+            stockQuantity < 0 ||
+            !Number.isFinite(quantityPerSale) ||
+            quantityPerSale <= 0
+        ) {
+            return -1
+        }
+
+        return Math.floor(stockQuantity / quantityPerSale)
+    }
+
+    // Sort highest available quantity to lowest.
+    // Items with unavailable/unverified stock appear last.
+    // Equal quantities retain their original menu order.
+    const sortedFilteredItems = filteredItems
+        .map((item, index) => ({ item, index }))
+        .sort((a, b) => {
+            const quantityA = getAvailableMenuQuantity(a.item)
+            const quantityB = getAvailableMenuQuantity(b.item)
+
+            if (quantityA < 0 && quantityB >= 0) return 1
+            if (quantityB < 0 && quantityA >= 0) return -1
+
+            if (quantityA < 0 && quantityB < 0) {
+                return a.index - b.index
+            }
+
+            return (
+                quantityB - quantityA ||
+                a.index - b.index
+            )
+        })
+        .map(entry => entry.item)
+
+    // =========================================================
+    // CART MANAGEMENT
+    // =========================================================
 
     function addToCart(item) {
         setCart(previous => {
-            const existing = previous.find(row => row.menu_item_id === item.menu_item_id)
+            const existing = previous.find(
+                row => row.menu_item_id === item.menu_item_id
+            )
 
             if (existing) {
                 return previous.map(row =>
                     row.menu_item_id === item.menu_item_id
-                        ? { ...row, quantity: row.quantity + 1 }
+                        ? {
+                            ...row,
+                            quantity: row.quantity + 1
+                        }
                         : row
                 )
             }
 
-            return [...previous, { ...item, quantity: 1 }]
+            return [
+                ...previous,
+                { ...item, quantity: 1 }
+            ]
         })
     }
 
@@ -529,8 +977,17 @@ export default function CashierPOS({ businessName, ownerEmail }) {
         setCart(previous =>
             previous
                 .map(item => {
-                    if (item.menu_item_id !== menuItemId) return item
-                    return { ...item, quantity: Math.max(0, item.quantity + change) }
+                    if (item.menu_item_id !== menuItemId) {
+                        return item
+                    }
+
+                    return {
+                        ...item,
+                        quantity: Math.max(
+                            0,
+                            item.quantity + change
+                        )
+                    }
                 })
                 .filter(item => item.quantity > 0)
         )
@@ -538,9 +995,29 @@ export default function CashierPOS({ businessName, ownerEmail }) {
 
     function removeFromCart(menuItemId) {
         setCart(previous =>
-            previous.filter(item => item.menu_item_id !== menuItemId)
+            previous.filter(
+                item => item.menu_item_id !== menuItemId
+            )
         )
     }
+
+    // =========================================================
+    // CURRENCY SELECTION
+    // =========================================================
+
+    function handleSaleCurrencyChange(nextCurrency) {
+        if (!SUPPORTED_CURRENCIES.includes(nextCurrency)) {
+            return
+        }
+
+        setSaleCurrencyCode(nextCurrency)
+        setAmountPaid('')
+        setError('')
+    }
+
+    // =========================================================
+    // CHECKOUT
+    // =========================================================
 
     async function handleCheckout() {
         if (processing) return
@@ -548,47 +1025,74 @@ export default function CashierPOS({ businessName, ownerEmail }) {
         setError('')
         setSuccessMessage('')
 
+        if (!settingsLoaded) {
+            setError(
+                'Currency settings are still loading. Please wait and try again.'
+            )
+            return
+        }
+
         if (!cart.length) {
             setError('Please add items to the cart.')
             return
         }
 
+        if (!fxConfigurationValid) {
+            setError(
+                `A valid central exchange rate for ${saleCurrencyCode} is not configured. Ask the Owner or Manager to update exchange rates in Settings.`
+            )
+            return
+        }
+
         const paid = Number(amountPaid)
 
-        if (!Number.isFinite(paid) || paid < total) {
-            setError('Amount paid must be at least the total sale amount.')
+        if (
+            !Number.isFinite(paid) ||
+            paid < total
+        ) {
+            setError(
+                'Amount paid must be at least the total sale amount.'
+            )
             return
         }
 
         if (
             paymentMethod !== 'cash' &&
-            Math.round(paid * 100) !== Math.round(total * 100)
+            roundMoney(paid) !== total
         ) {
-            setError('Mobile money and bank/card payments must equal the exact sale total.')
+            setError(
+                'Mobile money and bank/card payments must equal the exact sale total.'
+            )
             return
         }
 
-        // Aggregate the entire cart by canonical stock item.
-        // Rice and Sadza variants therefore share one stock balance.
         const stockRequirements = new Map()
 
         cart.forEach(item => {
             const stockItemId =
-                item.inventory_stock_item_id || item.menu_item_id
+                item.inventory_stock_item_id ||
+                item.menu_item_id
+
             if (
                 item.inventory_stock_verified === false ||
-                !Number.isFinite(Number(item.inventory_stock_quantity))
+                !Number.isFinite(
+                    Number(item.inventory_stock_quantity)
+                )
             ) {
                 stockRequirements.set(stockItemId, {
-                    name: item.inventory_stock_name || item.item_name,
+                    name:
+                        item.inventory_stock_name ||
+                        item.item_name,
                     required: Number(item.quantity),
                     available: NaN
                 })
+
                 return
             }
 
             const stockName =
-                item.inventory_stock_name || item.item_name
+                item.inventory_stock_name ||
+                item.item_name
 
             const quantityPerSale =
                 Number(item.quantity_per_sale || 1)
@@ -597,17 +1101,21 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                 Number(item.quantity) * quantityPerSale
 
             const rawAvailableQuantity =
-                item.inventory_stock_quantity ?? item.current_quantity
+                item.inventory_stock_quantity ??
+                item.current_quantity
 
             const availableQuantity =
-                rawAvailableQuantity === null || rawAvailableQuantity === undefined
+                rawAvailableQuantity == null
                     ? NaN
                     : Number(rawAvailableQuantity)
 
-            const existing = stockRequirements.get(stockItemId)
+            const existing =
+                stockRequirements.get(stockItemId)
 
             if (existing) {
-                if (existing.available !== availableQuantity) {
+                if (
+                    existing.available !== availableQuantity
+                ) {
                     existing.available = NaN
                 }
 
@@ -620,31 +1128,44 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                 })
             }
         })
-        const missingStockItems = [...stockRequirements.values()]
-            .filter(item => !Number.isFinite(item.available))
+
+        const missingStockItems =
+            [...stockRequirements.values()].filter(
+                item => !Number.isFinite(item.available)
+            )
 
         if (missingStockItems.length > 0) {
             setError(
-                `Could not verify stock quantities for: ${missingStockItems.map(item => item.name).join(', ')
+                `Could not verify stock quantities for: ${missingStockItems
+                    .map(item => item.name)
+                    .join(', ')
                 }. Reload the POS menu before checkout.`
             )
+
             return
         }
-        const overStockItems = [...stockRequirements.values()]
-            .filter(item => item.required > item.available)
 
-        const physicallyConfirmed = overStockItems.length > 0
+        const overStockItems =
+            [...stockRequirements.values()].filter(
+                item => item.required > item.available
+            )
+
+        const physicallyConfirmed =
+            overStockItems.length > 0
 
         if (physicallyConfirmed) {
-            const shortageSummary = overStockItems.map(item => {
-                const shortage = item.required - item.available
+            const shortageSummary = overStockItems
+                .map(item => {
+                    const shortage =
+                        item.required - item.available
 
-                return (
-                    `${item.name}: required ${item.required}, ` +
-                    `recorded stock ${item.available}, ` +
-                    `additional physical quantity confirmed ${shortage}`
-                )
-            }).join('\n')
+                    return (
+                        `${item.name}: required ${item.required}, ` +
+                        `recorded stock ${item.available}, ` +
+                        `additional physical quantity confirmed ${shortage}`
+                    )
+                })
+                .join('\n')
 
             const confirmed = window.confirm(
                 `STOCK CONFIRMATION REQUIRED\n\n` +
@@ -658,187 +1179,191 @@ export default function CashierPOS({ businessName, ownerEmail }) {
         }
 
         if (!checkoutRequestId.current) {
-            checkoutRequestId.current = crypto.randomUUID()
+            if (!globalThis.crypto?.randomUUID) {
+                setError(
+                    'Secure checkout request IDs are unavailable on this device.'
+                )
+                return
+            }
+
+            checkoutRequestId.current =
+                crypto.randomUUID()
         }
 
         setProcessing(true)
 
         try {
-            const { data, error: checkoutError } = await supabase.rpc(
-                'process_retail_pos_checkout',
-                {
-                    p_items: cart.map(item => ({
-                        menu_item_id: item.menu_item_id,
-                        quantity: item.quantity
-                    })),
-                    p_payment_method: paymentMethod,
-                    p_amount_paid: paid,
-                    p_checkout_request_id: checkoutRequestId.current,
-                    p_notes: null,
-                    p_physical_stock_confirmed: physicallyConfirmed
-                }
-            )
+            const { data, error: checkoutError } =
+                await supabase.rpc(
+                    'process_retail_pos_checkout_v2',
+                    {
+                        p_items: cart.map(item => ({
+                            menu_item_id: item.menu_item_id,
+                            quantity: item.quantity
+                        })),
 
-            if (checkoutError) {
-                throw checkoutError
-            }
+                        p_payment_method: paymentMethod,
+                        p_amount_paid: paid,
+                        p_checkout_request_id:
+                            checkoutRequestId.current,
+                        p_notes: null,
+                        p_physical_stock_confirmed:
+                            physicallyConfirmed,
+                        p_currency_code: saleCurrencyCode
+                    }
+                )
 
-            const receipt = Array.isArray(data) ? data[0] : data
+            if (checkoutError) throw checkoutError
 
-            if (!receipt?.sale_id || !receipt?.receipt_number) {
+            const receipt =
+                Array.isArray(data) ? data[0] : data
+
+            if (
+                !receipt?.sale_id ||
+                !receipt?.receipt_number
+            ) {
                 throw new Error(
-                    'The sale response was incomplete. Do not submit another sale. Check Recent Sales before retrying.'
+                    'The sale response was incomplete. Check Recent Sales before attempting another sale.'
                 )
             }
 
-            // The database has confirmed that the sale was saved.
             setLastReceipt(receipt)
+
             setSuccessMessage(
                 `Sale completed successfully. Receipt: ${receipt.receipt_number}`
             )
 
-            // Clear the cart only after the database confirms the sale.
             setCart([])
             setAmountPaid('')
             setPaymentMethod('cash')
+
             checkoutRequestId.current = null
 
-            // Load the saved receipt separately.
-            try {
-                await loadReceipt(receipt.sale_id)
+            // Load the saved receipt.
+            await loadReceipt(receipt.sale_id)
 
-                if (Capacitor.isNativePlatform() && printerConnected && printerHashKey) {
-                    // Give React time to update receiptDetails before printing.
-                    setTimeout(async () => {
-                        try {
-                            const { data: savedReceipt, error: receiptError } =
-                                await supabase.rpc('cashier_get_pos_receipt', {
-                                    p_sale_id: receipt.sale_id
-                                })
-
-                            if (receiptError) throw receiptError
-
-                            const rows = savedReceipt || []
-
-                            if (!rows.length) {
-                                throw new Error('Saved receipt details were not returned.')
-                            }
-
-                            const first = rows[0]
-                            const width = 32
-                            const line = '-'.repeat(width)
-
-                            const center = text =>
-                                text.length >= width
-                                    ? text.slice(0, width)
-                                    : ' '.repeat(Math.floor((width - text.length) / 2)) + text
-
-                            const leftRight = (left, right) =>
-                                left + ' '.repeat(Math.max(1, width - left.length - right.length)) + right
-
-                            const dateText = new Date(first.sale_datetime).toLocaleString(
-                                'en-GB',
-                                { timeZone: 'Africa/Harare' }
-                            )
-
-                            const receiptLines = [
-                                '\x1B\x40',
-                                '\x1B\x61\x01',
-                                '\x1B\x45\x01',
-                                businessName || 'MBARE CHITEKETE CANTEEN',
-                                '\x1B\x45\x00',
-                                'SALES RECEIPT',
-                                '\n',
-                                '\x1B\x61\x00',
-                                `Receipt: ${first.receipt_number}`,
-                                `Date: ${dateText}`,
-                                `Cashier: ${first.cashier_name || 'Cashier'}`,
-                                line
-                            ]
-
-                            rows.forEach(item => {
-                                receiptLines.push(
-                                    item.item_name,
-                                    leftRight(
-                                        `${item.quantity} x ${formatCurrency(item.unit_price)}`,
-                                        formatCurrency(item.line_total)
-                                    )
-                                )
-                            })
-
-                            receiptLines.push(
-                                line,
-                                '\x1B\x45\x01',
-                                leftRight('TOTAL', formatCurrency(first.total_amount)),
-                                '\x1B\x45\x00',
-                                line,
-                                `Payment: ${first.payment_method.replace('_', ' ')}`,
-                                `Paid: ${formatCurrency(first.amount_paid)}`,
-                                `Change: ${formatCurrency(first.change_amount)}`,
-                                '\n',
-                                center('Thank you for your purchase!'),
-                                '\n\n\n',
-                                '\x1D\x56\x00'
-                            )
-
-                            await EscPosPrinter.sendToPrinter({
-                                hashKey: printerHashKey,
-                                data: textToPrinterBytes(receiptLines.join('\n')),
-                                waitingTime: 3000
-                            })
-
-                            setPrinterMessage(`Receipt ${first.receipt_number} printed successfully.`)
-                        } catch (printError) {
-                            setPrinterError(
-                                `Sale saved, but automatic printing failed: ${printError.message}`
-                            )
+            // Automatic printing must not affect checkout success.
+            if (
+                Capacitor.isNativePlatform() &&
+                printerConnected &&
+                printerHashKey
+            ) {
+                try {
+                    const {
+                        data: savedReceipt,
+                        error: receiptError
+                    } = await supabase.rpc(
+                        'cashier_get_pos_receipt_v2',
+                        {
+                            p_sale_id: receipt.sale_id
                         }
-                    }, 300)
+                    )
+
+                    if (receiptError) throw receiptError
+
+                    const rows = savedReceipt || []
+
+                    if (!rows.length) {
+                        throw new Error(
+                            'Saved receipt details were not returned.'
+                        )
+                    }
+
+                    const receiptText =
+                        buildReceiptPrintText(
+                            rows,
+                            {
+                                ...rows[0],
+                                receipt_number:
+                                    receipt.receipt_number
+                            }
+                        )
+
+                    await EscPosPrinter.sendToPrinter({
+                        hashKey: printerHashKey,
+                        data: textToPrinterBytes(receiptText),
+                        waitingTime: 3000
+                    })
+
+                    setPrinterMessage(
+                        `Receipt ${receipt.receipt_number} printed successfully.`
+                    )
+                } catch (printError) {
+                    setPrinterError(
+                        `Sale saved, but automatic printing failed: ${printError.message}`
+                    )
                 }
-            } catch (receiptError) {
-                console.error('Receipt loading failed:', receiptError)
-                setError('Sale saved successfully, but the receipt could not be loaded. Use Recent Sales to reprint it.')
             }
 
-            // Refresh the menu independently.
             try {
                 await loadMenu()
             } catch (menuError) {
-                console.error('Menu refresh failed:', menuError)
+                console.error(
+                    'Menu refresh failed:',
+                    menuError
+                )
             }
 
-            // Refresh sales history independently.
             try {
                 await loadSalesHistory()
             } catch (historyError) {
-                console.error('Sales history refresh failed:', historyError)
+                console.error(
+                    'Sales history refresh failed:',
+                    historyError
+                )
             }
-
         } catch (err) {
-            setError(err.message || 'Checkout failed. Please try again.')
+            console.error('Checkout failed:', err)
+
+            setError(
+                err.message ||
+                'Checkout failed. Please check Recent Sales.'
+            )
         } finally {
             setProcessing(false)
         }
     }
 
+    // =========================================================
+    // RECEIPT DATA
+    // =========================================================
+
     async function loadReceipt(saleId) {
         setLoadingReceipt(true)
         setError('')
 
-        const { data, error } = await supabase.rpc(
-            'cashier_get_pos_receipt',
-            { p_sale_id: saleId }
-        )
+        try {
+            const { data, error: receiptError } =
+                await supabase.rpc(
+                    'cashier_get_pos_receipt_v2',
+                    { p_sale_id: saleId }
+                )
 
-        if (error) {
-            setError(`Sale saved, but receipt could not be loaded: ${error.message}`)
-            setReceiptDetails([])
-        } else {
+            if (receiptError) throw receiptError
+
             setReceiptDetails(data || [])
-        }
 
-        setLoadingReceipt(false)
+            if (!data?.length) {
+                setError(
+                    'Receipt details were not returned.'
+                )
+            }
+        } catch (err) {
+            console.error(
+                'Receipt loading failed:',
+                err
+            )
+
+            setReceiptDetails([])
+
+            setError(
+                `Receipt could not be loaded: ${err.message}`
+            )
+        } finally {
+            setLoadingReceipt(false)
+        }
     }
+
     async function handleReprint(sale) {
         setLastReceipt({
             sale_id: sale.sale_id,
@@ -847,67 +1372,406 @@ export default function CashierPOS({ businessName, ownerEmail }) {
 
         await loadReceipt(sale.sale_id)
     }
+
+    // =========================================================
+    // RENDER
+    // =========================================================
+
     return (
         <div className="page-content cashier-pos-page">
             <style>{`
-                .cashier-pos-page { min-width: 0; width: 100%; }
-                .cashier-pos-page, .cashier-pos-page * { box-sizing: border-box; }
-                .cashier-pos-page button, .cashier-pos-page select, .cashier-pos-page input { min-height: 42px; }
-                .cashier-pos-page input, .cashier-pos-page select { max-width: 100%; font-size: 16px; }
-                .cashier-pos-page .cashier-product-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) !important; gap: 6px; }
-                .cashier-pos-page .cashier-category-list { display: flex; flex-wrap: wrap; gap: 8px; }
-                .cashier-pos-page .cashier-cart-row { display: grid !important; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px !important; }
-                .cashier-pos-page .cashier-cart-row button { min-width: 42px; min-height: 42px; padding: 8px; }
-                .cashier-pos-page .cashier-payment-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-                .cashier-pos-page .cashier-payment-actions button { min-height: 46px; }
-                .cashier-pos-page .cashier-checkout-button { width: 100%; min-height: 50px; font-size: 16px; }
-                .cashier-pos-page .cashier-table-wrap { width: 100%; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-                @media (max-width: 600px) {
-                    .cashier-pos-page { padding-left: 10px !important; padding-right: 10px !important; }
-                    .cashier-pos-page .welcome-row h1 { font-size: 24px; }
-                    .cashier-pos-page .welcome-row p { font-size: 13px; }
-                    .cashier-pos-page .cashier-mobile-panel { padding: 12px !important; margin-top: 12px !important; }
-                    .cashier-pos-page .cashier-printer-panel { padding: 12px !important; }
-                    .cashier-pos-page .cashier-category-list { flex-wrap: nowrap; overflow-x: auto; padding: 2px 0 8px; scrollbar-width: thin; }
-                    .cashier-pos-page .cashier-category-list button { flex: 0 0 auto; min-height: 42px; white-space: nowrap; }
-                    .cashier-pos-page .cashier-product-grid { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; gap: 4px; }
-                    .cashier-pos-page .cashier-product-card { min-width: 0; min-height: 76px; padding: 5px 3px !important; overflow-wrap: anywhere; text-align: center !important; border-radius: 7px !important; }
-                    .cashier-pos-page .cashier-product-card strong { display: block; font-size: 10px; line-height: 1.2; }
-                    .cashier-pos-page .cashier-product-card > div { font-size: 8px !important; line-height: 1.15; margin-top: 2px; }
-                    .cashier-pos-page .cashier-product-card svg { width: 12px; height: 12px; }
-                    .cashier-pos-page .cashier-cart-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px !important; }
-                    .cashier-pos-page .cashier-cart-row > div:first-child { min-width: 0; }
-                    .cashier-pos-page .cashier-cart-row > div:nth-child(2) { grid-column: 2; }
-                    .cashier-pos-page .cashier-cart-row > strong { grid-column: 1 / -1; text-align: right; }
-                    .cashier-pos-page .cashier-payment-actions button { flex: 1 1 calc(50% - 8px); justify-content: center; padding: 10px 8px !important; font-size: 13px; }
-                    .cashier-pos-page .cashier-checkout-button { position: sticky; bottom: 8px; z-index: 3; }
-                    .cashier-pos-page .cashier-printer-panel button { min-height: 44px; }
-                    .cashier-pos-page .cash-pos-receipt { padding: 14px !important; }
-                    .cashier-pos-page table { min-width: 560px; }
-                }
-                @media (max-width: 360px) {
-                    .cashier-pos-page .cashier-product-grid { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; gap: 3px; }
-                    .cashier-pos-page .cashier-product-card { min-height: 68px; padding: 4px 2px !important; }
-                    .cashier-pos-page .cashier-product-card strong { font-size: 9px; }
-                    .cashier-pos-page .cashier-cart-row button { min-width: 38px; min-height: 40px; }
-                }
-            `}</style>
-            <div className="welcome-row">
+        .cashier-pos-page .cashier-welcome-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .cashier-pos-page .cashier-zimbabwe-clock {
+            background: linear-gradient(135deg, #123a63, #176b45);
+            color: #ffffff;
+            padding: 14px 20px;
+            border-radius: 12px;
+            min-width: 235px;
+            box-shadow: 0 5px 15px rgba(18, 58, 99, 0.15);
+        }
+
+        .cashier-pos-page .cashier-clock-label {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            color: #d1fae5;
+        }
+
+        .cashier-pos-page .cashier-clock-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4ade80;
+            box-shadow: 0 0 8px #4ade80;
+        }
+
+        .cashier-pos-page .cashier-clock-time {
+            font-size: 30px;
+            font-weight: 900;
+            letter-spacing: 2px;
+            line-height: 1.4;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .cashier-pos-page .cashier-clock-date {
+            font-size: 12px;
+            color: #e2e8f0;
+            margin-top: 3px;
+        }
+
+        .cashier-pos-page {
+            min-width: 0;
+            width: 100%;
+        }
+
+        .cashier-pos-page,
+        .cashier-pos-page * {
+            box-sizing: border-box;
+        }
+
+        .cashier-pos-page button,
+        .cashier-pos-page select,
+        .cashier-pos-page input {
+            min-height: 42px;
+        }
+
+        .cashier-pos-page input,
+        .cashier-pos-page select {
+            max-width: 100%;
+            font-size: 16px;
+        }
+
+        .cashier-pos-page .cashier-product-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+            gap: 6px;
+        }
+
+        .cashier-pos-page .cashier-product-image {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            overflow: hidden;
+            border-radius: 8px;
+            background: #f1f5f9;
+            margin-bottom: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .cashier-pos-page .cashier-product-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .cashier-pos-page .cashier-product-image-placeholder {
+            color: #94a3b8;
+            font-size: 11px;
+            text-align: center;
+        }
+
+        .cashier-pos-page .cashier-product-card strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .cashier-pos-page .cashier-category-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .cashier-pos-page .cashier-cart-row {
+            display: grid !important;
+            grid-template-columns: minmax(0, 1fr) auto auto;
+            align-items: center;
+            gap: 10px !important;
+        }
+
+        .cashier-pos-page .cashier-cart-row button {
+            min-width: 42px;
+            min-height: 42px;
+            padding: 8px;
+        }
+
+        .cashier-pos-page .cashier-payment-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .cashier-pos-page .cashier-payment-actions button {
+            min-height: 46px;
+        }
+
+        .cashier-pos-page .cashier-checkout-button {
+            width: 100%;
+            min-height: 50px;
+            font-size: 16px;
+        }
+
+        .cashier-pos-page .cashier-table-wrap {
+            width: 100%;
+            max-width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        @media (max-width: 600px) {
+            .cashier-pos-page {
+                padding-left: 10px !important;
+                padding-right: 10px !important;
+            }
+
+            .cashier-pos-page .cashier-welcome-header {
+                align-items: stretch;
+            }
+
+            .cashier-pos-page .cashier-zimbabwe-clock {
+                width: 100%;
+                min-width: 0;
+            }
+
+            .cashier-pos-page .cashier-clock-time {
+                font-size: 27px;
+            }
+
+            .cashier-pos-page .welcome-row h1 {
+                font-size: 24px;
+            }
+
+            .cashier-pos-page .welcome-row p {
+                font-size: 13px;
+            }
+
+            .cashier-pos-page .cashier-mobile-panel {
+                padding: 12px !important;
+                margin-top: 12px !important;
+            }
+
+            .cashier-pos-page .cashier-printer-panel {
+                padding: 12px !important;
+            }
+
+            .cashier-pos-page .cashier-category-list {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                padding: 2px 0 8px;
+                scrollbar-width: thin;
+            }
+
+            .cashier-pos-page .cashier-category-list button {
+                flex: 0 0 auto;
+                min-height: 42px;
+                white-space: nowrap;
+            }
+
+            .cashier-pos-page .cashier-product-grid {
+                grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+                gap: 4px;
+            }
+
+            .cashier-pos-page .cashier-product-card {
+                min-width: 0;
+                min-height: 110px;
+                padding: 5px 3px !important;
+                overflow-wrap: anywhere;
+                text-align: center !important;
+                border-radius: 7px !important;
+            }
+
+            .cashier-pos-page .cashier-product-image {
+                aspect-ratio: 4 / 3;
+                margin-bottom: 5px;
+                border-radius: 5px;
+            }
+
+            .cashier-pos-page .cashier-product-image-placeholder {
+                font-size: 8px;
+            }
+
+            .cashier-pos-page .cashier-product-card strong {
+                display: block;
+                font-size: 10px;
+                line-height: 1.2;
+            }
+
+            .cashier-pos-page .cashier-product-card > div {
+                font-size: 8px !important;
+                line-height: 1.15;
+                margin-top: 2px;
+            }
+
+            .cashier-pos-page .cashier-product-card svg {
+                width: 12px;
+                height: 12px;
+            }
+
+            .cashier-pos-page .cashier-cart-row {
+                grid-template-columns: minmax(0, 1fr) auto;
+                gap: 6px 8px !important;
+            }
+
+            .cashier-pos-page .cashier-cart-row > div:first-child {
+                min-width: 0;
+            }
+
+            .cashier-pos-page .cashier-cart-row > div:nth-child(2) {
+                grid-column: 2;
+            }
+
+            .cashier-pos-page .cashier-cart-row > strong {
+                grid-column: 1 / -1;
+                text-align: right;
+            }
+
+            .cashier-pos-page .cashier-payment-actions button {
+                flex: 1 1 calc(50% - 8px);
+                justify-content: center;
+                padding: 10px 8px !important;
+                font-size: 13px;
+            }
+
+            .cashier-pos-page .cashier-checkout-button {
+                position: sticky;
+                bottom: 8px;
+                z-index: 3;
+            }
+
+            .cashier-pos-page .cashier-printer-panel button {
+                min-height: 44px;
+            }
+
+            .cashier-pos-page .cash-pos-receipt {
+                padding: 14px !important;
+            }
+
+            .cashier-pos-page table {
+                min-width: 560px;
+            }
+        }
+
+        @media (max-width: 360px) {
+            .cashier-pos-page .cashier-product-grid {
+                grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+                gap: 3px;
+            }
+
+            .cashier-pos-page .cashier-product-card {
+                min-height: 110px;
+                padding: 4px 2px !important;
+            }
+
+            .cashier-pos-page .cashier-product-card strong {
+                font-size: 9px;
+            }
+
+            .cashier-pos-page .cashier-cart-row button {
+                min-width: 38px;
+                min-height: 40px;
+            }
+        }
+
+        @media print {
+            @page {
+                size: auto;
+                margin: 2mm;
+            }
+
+            body * {
+                visibility: hidden !important;
+            }
+
+            .cashier-pos-page .cash-pos-receipt,
+            .cashier-pos-page .cash-pos-receipt * {
+                visibility: visible !important;
+            }
+
+            .cashier-pos-page .cash-pos-receipt {
+                position: absolute !important;
+                left: 0 !important;
+                top: 0 !important;
+                width: 100% !important;
+                max-width: 74mm !important;
+                margin: 0 !important;
+                padding: 2mm !important;
+                border: none !important;
+                box-shadow: none !important;
+                background: white !important;
+                color: black !important;
+                overflow: visible !important;
+            }
+
+            .cashier-pos-page .cash-pos-receipt table {
+                width: 100% !important;
+                min-width: 0 !important;
+                table-layout: fixed !important;
+                font-size: 9px !important;
+            }
+
+            .cashier-pos-page .cash-pos-receipt th,
+            .cashier-pos-page .cash-pos-receipt td {
+                padding: 5px 2px !important;
+                overflow-wrap: anywhere !important;
+            }
+
+            .cashier-pos-page .receipt-print-actions {
+                display: none !important;
+            }
+        }
+    `}</style>
+
+            {/* Keep the rest of your existing POS dashboard JSX here.
+        Replace only the existing welcome-row with the updated header below. */}
+
+            <div className="welcome-row cashier-welcome-header">
                 <div>
                     <div className="eyebrow">SALES / POINT OF SALE</div>
                     <h1>Cashier POS</h1>
-                    <p>{businessName} · Quick sales and checkout</p>
+                    <p>{displayBusinessName} · Quick sales and checkout</p>
+                </div>
+
+                <div className="cashier-zimbabwe-clock">
+                    <div className="cashier-clock-label">
+                        <span className="cashier-clock-dot" />
+                        ZIMBABWE TIME · CAT (UTC+2)
+                    </div>
+
+                    <div className="cashier-clock-time">
+                        {formatZimbabweTime(currentDate)}
+                    </div>
+
+                    <div className="cashier-clock-date">
+                        {formatZimbabweDate(currentDate)}
+                    </div>
                 </div>
             </div>
 
+            {/* PRINTER PANEL */}
 
-            <div className="cashier-printer-panel" style={{
-                background: '#ffffff',
-                border: '1px solid #e2e8f0',
-                borderRadius: '12px',
-                padding: '16px',
-                marginBottom: '20px'
-            }}>
+            <div
+                className="cashier-printer-panel"
+                style={{
+                    background: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    marginBottom: '20px'
+                }}
+            >
                 <div style={{
                     display: 'flex',
                     justifyContent: 'space-between',
@@ -916,11 +1780,22 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                     gap: '12px'
                 }}>
                     <div>
-                        <h3 style={{ margin: 0, fontSize: '16px', color: '#162b42' }}>
+                        <h3 style={{
+                            margin: 0,
+                            fontSize: '16px',
+                            color: '#162b42'
+                        }}>
                             Thermal Printer
                         </h3>
-                        <p style={{ margin: '5px 0 0', fontSize: '13px', color: '#64748b' }}>
-                            {printerConnected ? 'Printer connected' : 'No printer connected'}
+
+                        <p style={{
+                            margin: '5px 0 0',
+                            fontSize: '13px',
+                            color: '#64748b'
+                        }}>
+                            {printerConnected
+                                ? 'Printer connected'
+                                : 'No printer connected'}
                         </p>
                     </div>
 
@@ -980,11 +1855,13 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                         disabled={printerLoading || printerConnected}
                         style={{
                             padding: '9px 13px',
-                            borderRadius: '8px',
                             border: 'none',
+                            borderRadius: '8px',
                             background: '#123a63',
                             color: '#fff',
-                            cursor: printerLoading || printerConnected ? 'not-allowed' : 'pointer'
+                            cursor: printerLoading || printerConnected
+                                ? 'not-allowed'
+                                : 'pointer'
                         }}
                     >
                         {printerLoading ? 'Please wait...' : 'Find Printers'}
@@ -1015,11 +1892,19 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                             }}
                         >
                             <option value="">Choose a printer</option>
+
                             {printerDevices.map((device, index) => {
                                 const address = device.address || device.id
+
                                 return (
-                                    <option key={address || index} value={address}>
-                                        {device.name || device.deviceName || address || `Printer ${index + 1}`}
+                                    <option
+                                        key={address || index}
+                                        value={address}
+                                    >
+                                        {device.name ||
+                                            device.deviceName ||
+                                            address ||
+                                            `Printer ${index + 1}`}
                                     </option>
                                 )
                             })}
@@ -1084,108 +1969,281 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                         </button>
                     </div>
                 )}
+
                 {printerMessage && (
-                    <p style={{ color: '#176b45', fontSize: '13px', marginBottom: 0 }}>
+                    <p style={{
+                        color: '#176b45',
+                        fontSize: '13px',
+                        marginBottom: 0
+                    }}>
                         {printerMessage}
                     </p>
                 )}
 
                 {printerError && (
-                    <p style={{ color: '#b42318', fontSize: '13px', marginBottom: 0 }}>
+                    <p style={{
+                        color: '#b42318',
+                        fontSize: '13px',
+                        marginBottom: 0
+                    }}>
                         {printerError}
-                    </p>
-                )}
-
-                {!Capacitor.isNativePlatform() && (
-                    <p style={{ color: '#64748b', fontSize: '12px', marginBottom: 0 }}>
-                        Direct Bluetooth and USB printing is available in the Android app.
-                        Browser printing remains available as a fallback.
                     </p>
                 )}
             </div>
 
-
-            {error && (
-                <div className="panel" style={{ padding: 16, color: '#b42318' }}>
-                    {error}
-                </div>
-            )}
-
-            {successMessage && (
-                <div
-                    className="panel"
-                    style={{
+            {
+                error && (
+                    <div className="panel" style={{
                         padding: 16,
-                        marginBottom: 16,
-                        color: '#176b45',
-                        background: '#ecfdf3',
-                        border: '1px solid #bbf7d0'
-                    }}
-                >
-                    {successMessage}
-                </div>
-            )}
+                        color: '#b42318'
+                    }}>
+                        {error}
+                    </div>
+                )
+            }
 
-
-            <div className="panel cashier-mobile-panel" style={{ padding: 20, marginTop: 20 }}>
-                <h2><ShoppingCart size={20} /> Current Sale</h2>
-
-                {cart.length === 0 ? (
-                    <p>Your cart is empty. Select menu items to begin.</p>
-                ) : cart.map(item => (
+            {
+                successMessage && (
                     <div
-                        key={item.menu_item_id}
-                        className="cashier-cart-row"
+                        className="panel"
                         style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            gap: 12,
-                            padding: '12px 0',
-                            borderBottom: '1px solid #edf0eb'
+                            padding: 16,
+                            marginBottom: 16,
+                            color: '#176b45',
+                            background: '#ecfdf3',
+                            border: '1px solid #bbf7d0'
                         }}
                     >
-                        <div>
-                            <strong>{item.item_name}</strong>
-                            <div>{formatCurrency(item.selling_price)} each</div>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <button onClick={() => updateQuantity(item.menu_item_id, -1)}>
-                                <Minus size={15} />
-                            </button>
-                            {item.quantity}
-                            <button onClick={() => updateQuantity(item.menu_item_id, 1)}>
-                                <Plus size={15} />
-                            </button>
-                            <button onClick={() => removeFromCart(item.menu_item_id)}>
-                                <Trash2 size={15} />
-                            </button>
-                        </div>
-
-                        <strong>
-                            {formatCurrency(item.quantity * Number(item.selling_price))}
-                        </strong>
+                        {successMessage}
                     </div>
-                ))}
+                )
+            }
 
-                <h2 style={{ textAlign: 'right', marginTop: 20 }}>
-                    TOTAL: {formatCurrency(total)}
+            {/* CURRENT SALE */}
+
+            <div
+                className="panel cashier-mobile-panel"
+                style={{ padding: 20, marginTop: 20 }}
+            >
+                <h2>
+                    <ShoppingCart size={20} /> Current Sale
                 </h2>
 
+                {/* CENTRAL CURRENCY SELECTION */}
+
                 <div style={{
-                    display: 'flex',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
                     gap: 10,
-                    flexWrap: 'wrap',
-                    marginTop: 16
-                }} className="cashier-payment-actions">
+                    margin: '12px 0 16px'
+                }}>
+                    <label style={{
+                        display: 'grid',
+                        gap: 5,
+                        fontSize: 13,
+                        fontWeight: 700
+                    }}>
+                        Sale currency
+
+                        <select
+                            value={saleCurrencyCode}
+                            disabled={processing || !settingsLoaded}
+                            onChange={event =>
+                                handleSaleCurrencyChange(event.target.value)
+                            }
+                            style={{
+                                width: '100%',
+                                padding: 10,
+                                border: '1px solid #cbd5e1',
+                                borderRadius: 8,
+                                background: '#fff'
+                            }}
+                        >
+                            <option value="USD">USD — US Dollar</option>
+                            <option value="ZAR">ZAR — South African Rand</option>
+                            <option value="ZWG">ZWG — Zimbabwe Gold</option>
+                        </select>
+                    </label>
+
+                    <div style={{
+                        display: 'grid',
+                        gap: 5,
+                        fontSize: 13,
+                        fontWeight: 700
+                    }}>
+                        Central exchange rate
+
+                        <div style={{
+                            padding: 11,
+                            border: '1px solid #cbd5e1',
+                            borderRadius: 8,
+                            background: '#f8fafc',
+                            fontWeight: 500
+                        }}>
+                            {!settingsLoaded
+                                ? 'Loading settings...'
+                                : saleRateValid
+                                    ? `1 ${saleCurrencyCode} = ${selectedCurrencyRate} USD`
+                                    : `No ${saleCurrencyCode} rate configured`}
+                        </div>
+                    </div>
+                </div>
+
+                <p style={{
+                    fontSize: 12,
+                    color: '#64748b',
+                    margin: '-5px 0 14px'
+                }}>
+                    Menu prices are stored in {settingsCurrency}.
+                    The POS automatically converts them using the centrally
+                    configured exchange rates. Exchange rates cannot be
+                    manually changed at checkout.
+                </p>
+
+                {!settingsLoaded && (
+                    <div style={{
+                        padding: 10,
+                        background: '#eff6ff',
+                        border: '1px solid #bfdbfe',
+                        borderRadius: 8,
+                        color: '#1d4ed8',
+                        fontSize: 13,
+                        marginBottom: 12
+                    }}>
+                        Loading central currency settings...
+                    </div>
+                )}
+
+                {missingSaleCurrencyRate && (
+                    <div style={{
+                        padding: 10,
+                        background: '#fff7ed',
+                        border: '1px solid #fed7aa',
+                        borderRadius: 8,
+                        color: '#9a3412',
+                        fontSize: 13,
+                        marginBottom: 12
+                    }}>
+                        No central exchange rate is configured for {saleCurrencyCode}.
+                        Please ask the Owner or Manager to configure this currency
+                        in Settings. Checkout in this currency is disabled.
+                    </div>
+                )}
+
+                {settingsLoaded && !baseRateValid && (
+                    <div style={{
+                        padding: 10,
+                        background: '#fff7ed',
+                        border: '1px solid #fed7aa',
+                        borderRadius: 8,
+                        color: '#9a3412',
+                        fontSize: 13,
+                        marginBottom: 12
+                    }}>
+                        The central exchange rate for the business currency
+                        ({settingsCurrency}) is missing or invalid.
+                        Checkout is disabled.
+                    </div>
+                )}
+
+                {cart.length === 0 ? (
+                    <p>
+                        Your cart is empty. Select menu items to begin.
+                    </p>
+                ) : (
+                    cart.map(item => (
+                        <div
+                            key={item.menu_item_id}
+                            className="cashier-cart-row"
+                            style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                gap: 12,
+                                padding: '12px 0',
+                                borderBottom: '1px solid #edf0eb'
+                            }}
+                        >
+                            <div>
+                                <strong>{item.item_name}</strong>
+
+                                <div>
+                                    {formatMoney(
+                                        convertedMenuPrice(item),
+                                        saleCurrencyCode
+                                    )} each
+                                </div>
+                            </div>
+
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8
+                            }}>
+                                <button
+                                    onClick={() =>
+                                        updateQuantity(item.menu_item_id, -1)
+                                    }
+                                >
+                                    <Minus size={15} />
+                                </button>
+
+                                {item.quantity}
+
+                                <button
+                                    onClick={() =>
+                                        updateQuantity(item.menu_item_id, 1)
+                                    }
+                                >
+                                    <Plus size={15} />
+                                </button>
+
+                                <button
+                                    onClick={() =>
+                                        removeFromCart(item.menu_item_id)
+                                    }
+                                >
+                                    <Trash2 size={15} />
+                                </button>
+                            </div>
+
+                            <strong>
+                                {formatMoney(
+                                    getLineTotal(item),
+                                    saleCurrencyCode
+                                )}
+                            </strong>
+                        </div>
+                    ))
+                )}
+
+                <h2 style={{
+                    textAlign: 'right',
+                    marginTop: 20
+                }}>
+                    TOTAL: {formatMoney(total, saleCurrencyCode)}
+                </h2>
+
+                {/* PAYMENT METHODS */}
+
+                <div
+                    style={{
+                        display: 'flex',
+                        gap: 10,
+                        flexWrap: 'wrap',
+                        marginTop: 16
+                    }}
+                    className="cashier-payment-actions"
+                >
                     <button
                         type="button"
                         onClick={() => setPaymentMethod('cash')}
                         style={{
                             background: paymentMethod === 'cash' ? '#eaf3ee' : '#fff',
                             color: paymentMethod === 'cash' ? '#176b45' : '#64716a',
-                            border: paymentMethod === 'cash' ? '2px solid #28785f' : '1px solid #dfe5df',
+                            border: paymentMethod === 'cash'
+                                ? '2px solid #28785f'
+                                : '1px solid #dfe5df',
                             borderRadius: 9,
                             padding: '12px 18px',
                             fontWeight: 700,
@@ -1201,7 +2259,9 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                         style={{
                             background: paymentMethod === 'mobile_money' ? '#eaf3ee' : '#fff',
                             color: paymentMethod === 'mobile_money' ? '#176b45' : '#64716a',
-                            border: paymentMethod === 'mobile_money' ? '2px solid #28785f' : '1px solid #dfe5df',
+                            border: paymentMethod === 'mobile_money'
+                                ? '2px solid #28785f'
+                                : '1px solid #dfe5df',
                             borderRadius: 9,
                             padding: '12px 18px',
                             fontWeight: 700,
@@ -1217,7 +2277,9 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                         style={{
                             background: paymentMethod === 'bank_card' ? '#eaf3ee' : '#fff',
                             color: paymentMethod === 'bank_card' ? '#176b45' : '#64716a',
-                            border: paymentMethod === 'bank_card' ? '2px solid #28785f' : '1px solid #dfe5df',
+                            border: paymentMethod === 'bank_card'
+                                ? '2px solid #28785f'
+                                : '1px solid #dfe5df',
                             borderRadius: 9,
                             padding: '12px 18px',
                             fontWeight: 700,
@@ -1234,209 +2296,614 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                     step="0.01"
                     placeholder="Amount paid"
                     value={amountPaid}
-                    onChange={event => setAmountPaid(event.target.value)}
+                    disabled={!fxConfigurationValid || processing}
+                    onChange={event =>
+                        setAmountPaid(event.target.value)
+                    }
                 />
 
                 <p>
-                    Change: {formatCurrency(Math.max(0, Number(amountPaid || 0) - total))}
+                    Change: {formatMoney(
+                        Math.max(
+                            0,
+                            Number(amountPaid || 0) - total
+                        ),
+                        saleCurrencyCode
+                    )}
                 </p>
 
                 <button
                     type="button"
                     className="button button-primary cashier-checkout-button"
-                    disabled={!cart.length || processing}
+                    disabled={
+                        !cart.length ||
+                        processing ||
+                        !fxConfigurationValid
+                    }
                     onClick={handleCheckout}
                 >
                     <ReceiptText size={17} />
-                    {processing ? 'Processing Sale...' : 'Checkout'}
+
+                    {processing
+                        ? 'Processing Sale...'
+                        : 'Checkout'}
                 </button>
             </div>
-            {loading ? (
-                <div className="panel" style={{ padding: 24 }}>
-                    Loading menu...
-                </div>
-            ) : (
-                <div className="panel cashier-mobile-panel" style={{ padding: 20 }}>
-                    <Search size={17} />
-                    <input
-                        placeholder="Search menu items..."
-                        value={search}
-                        onChange={event => setSearch(event.target.value)}
-                    />
 
-                    <div className="cashier-category-list" style={{
-                        display: 'flex',
-                        gap: 8,
-                        flexWrap: 'wrap',
-                        margin: '16px 0'
-                    }}>
-                        {categories.map(category => (
-                            <button
-                                key={category}
-                                type="button"
-                                onClick={() => setActiveCategory(category)}
-                                className="button button-light"
-                                style={{
-                                    background: activeCategory === category ? '#eaf3ee' : '#fff'
-                                }}
-                            >
-                                {category}
-                            </button>
-                        ))}
+            {/* MENU */}
+
+            {
+                loading ? (
+                    <div className="panel" style={{ padding: 24 }}>
+                        Loading menu...
                     </div>
+                ) : (
+                    <div
+                        className="panel cashier-mobile-panel"
+                        style={{ padding: 20 }}
+                    >
+                        <Search size={17} />
 
-                    <div className="cashier-product-grid" style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))',
-                        gap: 12
-                    }}>
-                        {filteredItems.map(item => {
-                            const priceConfigured = Number(item.selling_price) > 0
-
-                            const stockAvailable = Number(
-                                item.inventory_stock_quantity ?? item.current_quantity ?? 0
-                            )
-
-                            const saleReady = priceConfigured
-
-                            let unavailableReason = ''
-
-                            if (!priceConfigured) {
-                                unavailableReason = 'Price not configured'
-                            } else if (stockAvailable <= 0) {
-                                unavailableReason = 'No recorded stock — physical confirmation required at checkout'
+                        <input
+                            placeholder="Search menu items..."
+                            value={search}
+                            onChange={event =>
+                                setSearch(event.target.value)
                             }
+                        />
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            flexWrap: 'wrap',
+                            gap: 8,
+                            marginTop: 10,
+                            marginBottom: 10
+                        }}>
+                            <span style={{
+                                fontSize: 12,
+                                color: '#64748b'
+                            }}>
+                                {sortedFilteredItems.length} menu items
+                            </span>
 
-                            return (
+                            <span style={{
+                                fontSize: 12,
+                                fontWeight: 700,
+                                color: '#176b45',
+                                background: '#ecfdf3',
+                                padding: '6px 10px',
+                                borderRadius: 20
+                            }}>
+                                Highest stock first ↓
+                            </span>
+                        </div>
+                        <div
+                            className="cashier-category-list"
+                            style={{
+                                display: 'flex',
+                                gap: 8,
+                                flexWrap: 'wrap',
+                                margin: '16px 0'
+                            }}
+                        >
+                            {categories.map(category => (
                                 <button
-                                    key={item.menu_item_id}
+                                    key={category}
                                     type="button"
-                                    disabled={!saleReady}
-                                    onClick={() => addToCart(item)}
-                                    className="panel cashier-product-card"
-                                    title={unavailableReason}
+                                    onClick={() =>
+                                        setActiveCategory(category)
+                                    }
+                                    className="button button-light"
                                     style={{
-                                        padding: 16,
-                                        textAlign: 'left',
-                                        cursor: saleReady ? 'pointer' : 'not-allowed',
-                                        opacity: saleReady ? 1 : 0.55,
-                                        border: saleReady
-                                            ? '1px solid #e2e8f0'
-                                            : '1px solid #fca5a5'
+                                        background:
+                                            activeCategory === category
+                                                ? '#eaf3ee'
+                                                : '#fff'
                                     }}
                                 >
-                                    <strong>{item.item_name}</strong>
-                                    <div>{item.unit}</div>
-
-                                    <strong>{formatCurrency(item.selling_price)}</strong>
-                                    <div style={{ fontSize: 12, color: '#64748b' }}>
-                                        Shared stock ({item.inventory_stock_name}): {stockAvailable}
-                                    </div>
-
-                                    {!saleReady ? (
-                                        <div style={{
-                                            marginTop: 8,
-                                            color: '#b42318',
-                                            fontSize: 12,
-                                            fontWeight: 700
-                                        }}>
-                                            {unavailableReason}
-                                        </div>
-                                    ) : (
-                                        <Plus size={16} />
-                                    )}
+                                    {category}
                                 </button>
-                            )
-                        })}
-                    </div>
-                </div>
-            )}
-
-            {lastReceipt && (
-                <div className="panel cash-pos-receipt" style={{
-                    padding: 24,
-                    marginTop: 20,
-                    maxWidth: 480,
-                    marginLeft: 'auto',
-                    marginRight: 'auto'
-                }}>
-                    <div style={{ textAlign: 'center', marginBottom: 20 }}>
-                        <h2>{businessName || 'Mbare Chitekete Canteen'}</h2>
-                        <p>SALES RECEIPT</p>
-                        <strong>{lastReceipt.receipt_number}</strong>
-                    </div>
-
-                    {loadingReceipt ? (
-                        <p>Loading receipt...</p>
-                    ) : receiptDetails.length > 0 ? (
-                        <>
-                            <p>
-                                Date: {new Date(receiptDetails[0].sale_datetime)
-                                    .toLocaleString('en-GB', {
-                                        timeZone: 'Africa/Harare'
-                                    })}
-                            </p>
-                            <p>Cashier: {receiptDetails[0].cashier_name}</p>
-
-                            <hr />
-
-                            {receiptDetails.map((item, index) => (
-                                <div key={`${item.sale_id}-${index}`} style={{
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    gap: 12,
-                                    padding: '8px 0'
-                                }}>
-                                    <div>
-                                        <strong>{item.item_name}</strong>
-                                        <div>
-                                            {item.quantity} × {formatCurrency(item.unit_price)}
-                                        </div>
-                                    </div>
-                                    <strong>{formatCurrency(item.line_total)}</strong>
-                                </div>
                             ))}
+                        </div>
 
-                            <hr />
+                        <div
+                            className="cashier-product-grid"
+                            style={{
+                                display: 'grid',
+                                gridTemplateColumns:
+                                    'repeat(auto-fill,minmax(180px,1fr))',
+                                gap: 12
+                            }}
+                        >
+                            {sortedFilteredItems.map(item => {
+                                const priceConfigured =
+                                    Number(item.selling_price) > 0
 
-                            <h2 style={{ textAlign: 'right' }}>
-                                TOTAL: {formatCurrency(receiptDetails[0].total_amount)}
-                            </h2>
+                                const stockAvailable = Number(
+                                    item.inventory_stock_quantity ??
+                                    item.current_quantity ??
+                                    0
+                                )
 
-                            <p>Payment: {receiptDetails[0].payment_method.replace('_', ' ')}</p>
-                            <p>Amount paid: {formatCurrency(receiptDetails[0].amount_paid)}</p>
-                            <p>Change: {formatCurrency(receiptDetails[0].change_amount)}</p>
+                                const saleReady = priceConfigured
 
-                            <p style={{ textAlign: 'center', marginTop: 20 }}>
-                                Thank you for your purchase!
-                            </p>
-                            <div style={{
-                                display: 'flex',
-                                justifyContent: 'center',
-                                gap: 10,
-                                marginTop: 20
-                            }}>
-                                <button
-                                    type="button"
-                                    className="button button-primary"
-                                    disabled={loadingReceipt || printerLoading || receiptDetails.length === 0}
-                                    onClick={printReceipt}
+                                let unavailableReason = ''
+
+                                if (!priceConfigured) {
+                                    unavailableReason =
+                                        'Price not configured'
+                                } else if (stockAvailable <= 0) {
+                                    unavailableReason =
+                                        'No recorded stock — physical confirmation required at checkout'
+                                }
+
+                                return (
+                                    <button
+                                        key={item.menu_item_id}
+                                        type="button"
+                                        disabled={!saleReady}
+                                        onClick={() => addToCart(item)}
+                                        className="panel cashier-product-card"
+                                        title={unavailableReason}
+                                        style={{
+                                            padding: 12,
+                                            textAlign: 'left',
+                                            cursor: saleReady
+                                                ? 'pointer'
+                                                : 'not-allowed',
+                                            opacity: saleReady ? 1 : 0.55,
+                                            border: saleReady
+                                                ? '1px solid #e2e8f0'
+                                                : '1px solid #fca5a5',
+                                            background: '#fff'
+                                        }}
+                                    >
+                                        <div className="cashier-product-image">
+                                            {item.image_url && (
+                                                <img
+                                                    src={item.image_url}
+                                                    alt={item.item_name}
+                                                    loading="lazy"
+                                                    onError={event => {
+                                                        event.currentTarget.style.display = 'none'
+
+                                                        const placeholder =
+                                                            event.currentTarget.parentElement?.querySelector(
+                                                                '.cashier-product-image-placeholder'
+                                                            )
+
+                                                        if (placeholder) {
+                                                            placeholder.style.display = 'flex'
+                                                        }
+                                                    }}
+                                                />
+                                            )}
+
+                                            <div
+                                                className="cashier-product-image-placeholder"
+                                                style={{
+                                                    display: item.image_url
+                                                        ? 'none'
+                                                        : 'flex'
+                                                }}
+                                            >
+                                                No product photo
+                                            </div>
+                                        </div>
+
+                                        <strong>{item.item_name}</strong>
+
+                                        <div>{item.unit}</div>
+
+                                        <strong>
+                                            {formatMoney(
+                                                convertedMenuPrice(item),
+                                                saleCurrencyCode
+                                            )}
+                                        </strong>
+
+                                        <div style={{
+                                            fontSize: 12,
+                                            color: '#64748b'
+                                        }}>
+                                            Shared stock ({item.inventory_stock_name}): {stockAvailable}
+                                        </div>
+
+                                        {!saleReady ? (
+                                            <div style={{
+                                                marginTop: 8,
+                                                color: '#b42318',
+                                                fontSize: 12,
+                                                fontWeight: 700
+                                            }}>
+                                                {unavailableReason}
+                                            </div>
+                                        ) : (
+                                            <Plus size={16} />
+                                        )}
+                                    </button>
+                                )
+                            })}
+                        </div>
+                    </div>
+                )
+            }
+
+            {/* RECEIPT */}
+
+            {
+                lastReceipt && (
+                    <div
+                        className="panel cash-pos-receipt"
+                        style={{
+                            padding: 20,
+                            marginTop: 20,
+                            width: '100%',
+                            maxWidth: 420,
+                            marginLeft: 'auto',
+                            marginRight: 'auto',
+                            background: '#fff',
+                            color: '#111827',
+                            border: '1px solid #e2e8f0',
+                            fontFamily: 'Arial, sans-serif'
+                        }}
+                    >
+                        {loadingReceipt ? (
+                            <p>Loading receipt...</p>
+                        ) : receiptDetails.length > 0 ? (
+                            <>
+                                {(() => {
+                                    const receipt = receiptDetails[0]
+
+                                    const receiptCurrency =
+                                        receipt.currency_code || 'USD'
+
+                                    const saleDate =
+                                        new Date(receipt.sale_datetime)
+
+                                    const dateText =
+                                        saleDate.toLocaleDateString(
+                                            'en-GB',
+                                            {
+                                                timeZone: 'Africa/Harare'
+                                            }
+                                        )
+
+                                    const timeText =
+                                        saleDate.toLocaleTimeString(
+                                            'en-GB',
+                                            {
+                                                timeZone: 'Africa/Harare',
+                                                hour: '2-digit',
+                                                minute: '2-digit',
+                                                second: '2-digit'
+                                            }
+                                        )
+
+                                    return (
+                                        <>
+                                            <div style={{
+                                                textAlign: 'center',
+                                                marginBottom: 18,
+                                                fontWeight: 800
+                                            }}>
+                                                <h2 style={{
+                                                    margin: '0 0 6px',
+                                                    fontSize: 21,
+                                                    fontWeight: 900,
+                                                    letterSpacing: 0.5
+                                                }}>
+                                                    {displayBusinessName}
+                                                </h2>
+
+                                                <div style={{
+                                                    fontSize: 14,
+                                                    fontWeight: 900,
+                                                    marginBottom: 8
+                                                }}>
+                                                    SALES RECEIPT
+                                                </div>
+
+                                                <strong style={{
+                                                    fontSize: 13,
+                                                    overflowWrap: 'anywhere',
+                                                    fontWeight: 900
+                                                }}>
+                                                    Receipt No: {lastReceipt.receipt_number}
+                                                </strong>
+                                            </div>
+
+                                            <hr style={{
+                                                border: 0,
+                                                borderTop: '1px dashed #64748b',
+                                                margin: '12px 0'
+                                            }} />
+
+                                            <div style={{
+                                                display: 'grid',
+                                                gridTemplateColumns: 'auto 1fr',
+                                                gap: '7px 12px',
+                                                fontSize: 13,
+                                                fontWeight: 700
+                                            }}>
+                                                <strong>Date</strong>
+                                                <strong>{dateText}</strong>
+
+                                                <strong>Time</strong>
+                                                <strong>{timeText}</strong>
+
+                                                <strong>Cashier</strong>
+                                                <strong>{receipt.cashier_name || 'Cashier'}</strong>
+                                            </div>
+
+                                            <hr style={{
+                                                border: 0,
+                                                borderTop: '1px dashed #64748b',
+                                                margin: '12px 0'
+                                            }} />
+
+                                            <div style={{
+                                                fontWeight: 900,
+                                                fontSize: 13,
+                                                marginBottom: 8
+                                            }}>
+                                                ITEM DETAILS
+                                            </div>
+
+                                            <table style={{
+                                                width: '100%',
+                                                minWidth: 0,
+                                                tableLayout: 'fixed',
+                                                borderCollapse: 'collapse',
+                                                fontSize: 11,
+                                                fontWeight: 800
+                                            }}>
+                                                <colgroup>
+                                                    <col style={{ width: '38%' }} />
+                                                    <col style={{ width: '12%' }} />
+                                                    <col style={{ width: '24%' }} />
+                                                    <col style={{ width: '26%' }} />
+                                                </colgroup>
+
+                                                <thead>
+                                                    <tr style={{
+                                                        borderBottom: '1px solid #64748b',
+                                                        fontWeight: 900
+                                                    }}>
+                                                        <th style={{
+                                                            textAlign: 'left',
+                                                            padding: '7px 2px',
+                                                            overflowWrap: 'anywhere',
+                                                            fontWeight: 900
+                                                        }}>
+                                                            Description
+                                                        </th>
+
+                                                        <th style={{
+                                                            textAlign: 'center',
+                                                            padding: '7px 2px',
+                                                            fontWeight: 900
+                                                        }}>
+                                                            QTY
+                                                        </th>
+
+                                                        <th style={{
+                                                            textAlign: 'right',
+                                                            padding: '7px 2px',
+                                                            fontWeight: 900
+                                                        }}>
+                                                            Unit Price
+                                                        </th>
+
+                                                        <th style={{
+                                                            textAlign: 'right',
+                                                            padding: '7px 2px',
+                                                            fontWeight: 900
+                                                        }}>
+                                                            Amount
+                                                        </th>
+                                                    </tr>
+                                                </thead>
+
+                                                <tbody>
+                                                    {receiptDetails.map((item, index) => (
+                                                        <tr
+                                                            key={`${item.sale_id}-${index}`}
+                                                            style={{
+                                                                borderBottom: '1px solid #e2e8f0',
+                                                                fontWeight: 800
+                                                            }}
+                                                        >
+                                                            <td style={{
+                                                                textAlign: 'left',
+                                                                padding: '9px 2px',
+                                                                overflowWrap: 'anywhere',
+                                                                verticalAlign: 'top',
+                                                                fontWeight: 800
+                                                            }}>
+                                                                {item.item_name}
+                                                            </td>
+
+                                                            <td style={{
+                                                                textAlign: 'center',
+                                                                padding: '9px 2px',
+                                                                verticalAlign: 'top',
+                                                                fontWeight: 800
+                                                            }}>
+                                                                {item.quantity}
+                                                            </td>
+
+                                                            <td style={{
+                                                                textAlign: 'right',
+                                                                padding: '9px 2px',
+                                                                overflowWrap: 'anywhere',
+                                                                verticalAlign: 'top',
+                                                                fontWeight: 800
+                                                            }}>
+                                                                {formatMoney(
+                                                                    item.unit_price,
+                                                                    receiptCurrency
+                                                                )}
+                                                            </td>
+
+                                                            <td style={{
+                                                                textAlign: 'right',
+                                                                padding: '9px 2px',
+                                                                overflowWrap: 'anywhere',
+                                                                verticalAlign: 'top',
+                                                                fontWeight: 800
+                                                            }}>
+                                                                {formatMoney(
+                                                                    item.line_total,
+                                                                    receiptCurrency
+                                                                )}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+
+                                            <hr style={{
+                                                border: 0,
+                                                borderTop: '1px dashed #64748b',
+                                                margin: '12px 0'
+                                            }} />
+
+                                            <div style={{
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                gap: 10,
+                                                fontWeight: 900,
+                                                fontSize: 16
+                                            }}>
+                                                <strong>TOTAL</strong>
+
+                                                <strong>
+                                                    {formatMoney(
+                                                        receipt.total_amount,
+                                                        receiptCurrency
+                                                    )}
+                                                </strong>
+                                            </div>
+
+                                            <hr style={{
+                                                border: 0,
+                                                borderTop: '1px dashed #64748b',
+                                                margin: '12px 0'
+                                            }} />
+
+                                            <div style={{
+                                                display: 'grid',
+                                                gridTemplateColumns: '1fr auto',
+                                                gap: 9,
+                                                fontSize: 13,
+                                                fontWeight: 700
+                                            }}>
+                                                <strong>Payment method</strong>
+
+                                                <strong style={{ textAlign: 'right' }}>
+                                                    {(receipt.payment_method || '')
+                                                        .replace('_', ' ')}
+                                                </strong>
+
+                                                <strong>Amount paid</strong>
+
+                                                <strong style={{ textAlign: 'right' }}>
+                                                    {formatMoney(
+                                                        receipt.amount_paid,
+                                                        receiptCurrency
+                                                    )}
+                                                </strong>
+
+                                                <strong>Change</strong>
+
+                                                <strong style={{ textAlign: 'right' }}>
+                                                    {formatMoney(
+                                                        receipt.change_amount,
+                                                        receiptCurrency
+                                                    )}
+                                                </strong>
+                                            </div>
+
+                                            <hr style={{
+                                                border: 0,
+                                                borderTop: '1px dashed #64748b',
+                                                margin: '14px 0'
+                                            }} />
+
+                                            <div style={{
+                                                textAlign: 'center',
+                                                marginTop: 16,
+                                                lineHeight: 1.6,
+                                                fontWeight: 800
+                                            }}>
+                                                <strong style={{
+                                                    fontSize: 13,
+                                                    fontWeight: 900
+                                                }}>
+                                                    THANK YOU FOR YOUR PURCHASE!
+                                                </strong>
+
+                                                <div style={{
+                                                    fontSize: 12,
+                                                    fontWeight: 800
+                                                }}>
+                                                    We appreciate your support.
+                                                </div>
+
+                                                <div style={{
+                                                    fontSize: 12,
+                                                    fontWeight: 900,
+                                                    marginTop: 5
+                                                }}>
+                                                    GOOD FOOD. GREAT SERVICE. SEE YOU AGAIN!
+                                                </div>
+                                            </div>
+                                        </>
+                                    )
+                                })()}
+
+                                <div
+                                    className="receipt-print-actions"
+                                    style={{
+                                        display: 'flex',
+                                        justifyContent: 'center',
+                                        marginTop: 20
+                                    }}
                                 >
-                                    <ReceiptText size={16} />
-                                    {loadingReceipt
-                                        ? 'Loading Receipt...'
-                                        : printerLoading
+                                    <button
+                                        type="button"
+                                        className="button button-primary"
+                                        disabled={
+                                            loadingReceipt ||
+                                            printerLoading ||
+                                            receiptDetails.length === 0
+                                        }
+                                        onClick={printReceipt}
+                                    >
+                                        <ReceiptText size={16} />
+
+                                        {printerLoading
                                             ? 'Printing...'
                                             : 'Print Receipt'}
-                                </button>
-                            </div>
-                        </>
-                    ) : (
-                        <p>Receipt details are unavailable.</p>
-                    )}
-                </div>
-            )}
-            <div className="panel cashier-mobile-panel" style={{ padding: 20, marginTop: 20 }}>
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            <p>Receipt details are unavailable.</p>
+                        )}
+                    </div>
+                )
+            }
+
+            {/* RECENT SALES */}
+
+            <div
+                className="panel cashier-mobile-panel"
+                style={{ padding: 20, marginTop: 20 }}
+            >
                 <h2>
                     <ReceiptText size={20} />
                     Recent Sales
@@ -1447,8 +2914,14 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                 ) : salesHistory.length === 0 ? (
                     <p>No sales recorded yet.</p>
                 ) : (
-                    <div className="cashier-table-wrap" style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <div
+                        className="cashier-table-wrap"
+                        style={{ overflowX: 'auto' }}
+                    >
+                        <table style={{
+                            width: '100%',
+                            borderCollapse: 'collapse'
+                        }}>
                             <thead>
                                 <tr>
                                     <th align="left">Receipt</th>
@@ -1458,25 +2931,42 @@ export default function CashierPOS({ businessName, ownerEmail }) {
                                     <th align="left">Action</th>
                                 </tr>
                             </thead>
+
                             <tbody>
                                 {salesHistory.map(sale => (
                                     <tr key={sale.sale_id}>
                                         <td>{sale.receipt_number}</td>
+
                                         <td>
-                                            {new Date(sale.sale_datetime).toLocaleString(
+                                            {new Date(
+                                                sale.sale_datetime
+                                            ).toLocaleString(
                                                 'en-GB',
-                                                { timeZone: 'Africa/Harare' }
+                                                {
+                                                    timeZone: 'Africa/Harare'
+                                                }
                                             )}
                                         </td>
-                                        <td>{sale.payment_method.replace('_', ' ')}</td>
-                                        <td align="right">
-                                            {formatCurrency(sale.total_amount)}
+
+                                        <td>
+                                            {(sale.payment_method || '')
+                                                .replace('_', ' ')}
                                         </td>
+
+                                        <td align="right">
+                                            {formatMoney(
+                                                sale.total_amount,
+                                                sale.currency_code || 'USD'
+                                            )}
+                                        </td>
+
                                         <td>
                                             <button
                                                 type="button"
                                                 className="button button-light"
-                                                onClick={() => handleReprint(sale)}
+                                                onClick={() =>
+                                                    handleReprint(sale)
+                                                }
                                             >
                                                 Reprint Receipt
                                             </button>

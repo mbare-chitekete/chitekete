@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
     CheckCircle2,
     XCircle,
@@ -10,24 +10,40 @@ import {
     CalendarDays,
     Clock3,
     LoaderCircle,
-    FileText
+    FileText,
+    MessageSquare,
+    BadgeCheck,
+    AlertCircle,
+    UserRound,
+    Wallet
 } from 'lucide-react'
 import { supabase } from './supabase'
+
+const CURRENCIES = ['USD', 'ZAR', 'ZWG']
 
 const formatDate = value => {
     if (!value) return '—'
 
-    return new Date(`${value}T12:00:00`).toLocaleDateString('en-GB', {
+    const date = new Date(`${value}T12:00:00`)
+
+    if (Number.isNaN(date.getTime())) return '—'
+
+    return date.toLocaleDateString('en-GB', {
         day: 'numeric',
         month: 'short',
-        year: 'numeric'
+        year: 'numeric',
+        timeZone: 'Africa/Harare'
     })
 }
 
 const formatDateTime = value => {
     if (!value) return '—'
 
-    return new Date(value).toLocaleString('en-GB', {
+    const date = new Date(value)
+
+    if (Number.isNaN(date.getTime())) return '—'
+
+    return date.toLocaleString('en-GB', {
         day: 'numeric',
         month: 'short',
         year: 'numeric',
@@ -37,18 +53,59 @@ const formatDateTime = value => {
     })
 }
 
-const formatMoney = (amount, currency) => {
+const formatMoney = (amount, currency = 'USD') => {
     if (amount === null || amount === undefined || amount === '') {
         return 'Not specified'
     }
 
-    return `${Number(amount).toFixed(2)} ${currency || 'USD'}`
+    const numericAmount = Number(amount)
+
+    if (!Number.isFinite(numericAmount)) return 'Invalid amount'
+
+    return `${numericAmount.toFixed(2)} ${currency}`
 }
 
 const statusStyle = status => {
-    if (status === 'approved') return 'bg-green-100 text-green-700'
-    if (status === 'rejected') return 'bg-red-100 text-red-700'
+    if (status === 'approved') {
+        return 'bg-green-100 text-green-700'
+    }
+
+    if (status === 'rejected') {
+        return 'bg-red-100 text-red-700'
+    }
+
     return 'bg-amber-100 text-amber-700'
+}
+
+const statusLabel = status => {
+    if (!status) return 'Unknown'
+
+    return status.charAt(0).toUpperCase() + status.slice(1)
+}
+
+const getRequestType = type => {
+    if (type === 'staff_meal') return 'Staff Meal'
+    if (type === 'transport') return 'Transport'
+
+    return String(type || 'Benefit').replaceAll('_', ' ')
+}
+
+const getErrorMessage = error => {
+    const message = error?.message || ''
+
+    if (message.includes('already been reviewed')) {
+        return 'This request has already been reviewed. Refreshing the requests...'
+    }
+
+    if (message.includes('Benefit request not found')) {
+        return 'This request could not be found. It may have been removed or is no longer available.'
+    }
+
+    if (message.includes('Only the Owner')) {
+        return 'Only the Owner account can review staff benefit requests.'
+    }
+
+    return message || 'Unable to process this request.'
 }
 
 export default function OwnerBenefitReviews() {
@@ -57,14 +114,19 @@ export default function OwnerBenefitReviews() {
     const [refreshing, setRefreshing] = useState(false)
     const [reviewing, setReviewing] = useState('')
     const [filter, setFilter] = useState('pending')
+
     const [approvedAmounts, setApprovedAmounts] = useState({})
     const [ownerNotes, setOwnerNotes] = useState({})
+
     const [message, setMessage] = useState('')
     const [error, setError] = useState('')
 
     const loadRequests = useCallback(async (showRefresh = false) => {
-        if (showRefresh) setRefreshing(true)
-        else setLoading(true)
+        if (showRefresh) {
+            setRefreshing(true)
+        } else {
+            setLoading(true)
+        }
 
         setError('')
 
@@ -76,6 +138,7 @@ export default function OwnerBenefitReviews() {
             if (requestError) throw requestError
 
             const rows = Array.isArray(data) ? data : []
+
             setRequests(rows)
 
             setApprovedAmounts(previous => {
@@ -84,9 +147,13 @@ export default function OwnerBenefitReviews() {
                 rows.forEach(request => {
                     if (next[request.id] === undefined) {
                         next[request.id] =
-                            request.approved_amount ??
-                            request.requested_amount ??
-                            ''
+                            request.approved_amount !== null &&
+                                request.approved_amount !== undefined
+                                ? String(request.approved_amount)
+                                : request.requested_amount !== null &&
+                                    request.requested_amount !== undefined
+                                    ? String(request.requested_amount)
+                                    : ''
                     }
                 })
 
@@ -105,8 +172,14 @@ export default function OwnerBenefitReviews() {
                 return next
             })
         } catch (err) {
-            console.error('Unable to load staff benefit requests:', err)
-            setError(err.message || 'Unable to load staff benefit requests.')
+            console.error(
+                'Unable to load staff benefit requests:',
+                err
+            )
+
+            setError(
+                err.message || 'Unable to load staff benefit requests.'
+            )
         } finally {
             setLoading(false)
             setRefreshing(false)
@@ -118,35 +191,58 @@ export default function OwnerBenefitReviews() {
     }, [loadRequests])
 
     const reviewRequest = async (request, decision) => {
+        if (reviewing) return
+
         setMessage('')
         setError('')
+
+        if (!request?.id || request.status !== 'pending') {
+            setError('Only pending requests can be reviewed.')
+            return
+        }
 
         const notes = (ownerNotes[request.id] || '').trim()
         const amountValue = approvedAmounts[request.id]
 
         let approvedAmount = null
 
+        if (decision !== 'approved' && decision !== 'rejected') {
+            setError('Invalid review decision.')
+            return
+        }
+
         if (decision === 'rejected' && !notes) {
             setError('Please provide a reason when rejecting a request.')
             return
         }
 
-        if (decision === 'approved' && amountValue !== '' && amountValue !== null) {
+        if (
+            decision === 'approved' &&
+            amountValue !== '' &&
+            amountValue !== null &&
+            amountValue !== undefined
+        ) {
             approvedAmount = Number(amountValue)
 
-            if (!Number.isFinite(approvedAmount) || approvedAmount < 0) {
+            if (
+                !Number.isFinite(approvedAmount) ||
+                approvedAmount < 0
+            ) {
                 setError('Enter a valid approved amount of zero or more.')
                 return
             }
         }
 
-        const type = String(request.request_type || 'benefit')
-            .replaceAll('_', ' ')
+        const currency = CURRENCIES.includes(request.currency)
+            ? request.currency
+            : 'USD'
+
+        const type = getRequestType(request.request_type).toLowerCase()
 
         const confirmation = decision === 'approved'
             ? approvedAmount === null
-                ? `Approve this ${type} request without an approved amount?`
-                : `Approve this ${type} request for ${request.currency || 'USD'} ${approvedAmount.toFixed(2)}?`
+                ? `Approve this ${type} request without specifying an approved amount?`
+                : `Approve this ${type} request for ${currency} ${approvedAmount.toFixed(2)}?`
             : 'Reject this staff benefit request?'
 
         if (!window.confirm(confirmation)) return
@@ -159,8 +255,11 @@ export default function OwnerBenefitReviews() {
                 {
                     p_request_id: request.id,
                     p_decision: decision,
-                    p_approved_amount: decision === 'approved' ? approvedAmount : null,
-                    p_owner_notes: notes
+                    p_approved_amount:
+                        decision === 'approved'
+                            ? approvedAmount
+                            : null,
+                    p_owner_notes: notes || null
                 }
             )
 
@@ -174,19 +273,44 @@ export default function OwnerBenefitReviews() {
 
             await loadRequests(true)
         } catch (err) {
-            console.error('Unable to review staff benefit request:', err)
-            setError(err.message || 'Unable to process this request.')
+            console.error(
+                'Unable to review staff benefit request:',
+                err
+            )
+
+            setError(getErrorMessage(err))
+
+            if (
+                err.message?.includes('already been reviewed') ||
+                err.message?.includes('Benefit request not found')
+            ) {
+                await loadRequests(true)
+            }
         } finally {
             setReviewing('')
         }
     }
 
-    const pendingCount = requests.filter(x => x.status === 'pending').length
-    const approvedCount = requests.filter(x => x.status === 'approved').length
-    const rejectedCount = requests.filter(x => x.status === 'rejected').length
+    const pendingCount = useMemo(
+        () => requests.filter(request => request.status === 'pending').length,
+        [requests]
+    )
 
-    const filteredRequests = requests.filter(request =>
-        filter === 'all' || request.status === filter
+    const approvedCount = useMemo(
+        () => requests.filter(request => request.status === 'approved').length,
+        [requests]
+    )
+
+    const rejectedCount = useMemo(
+        () => requests.filter(request => request.status === 'rejected').length,
+        [requests]
+    )
+
+    const filteredRequests = useMemo(
+        () => requests.filter(request =>
+            filter === 'all' || request.status === filter
+        ),
+        [requests, filter]
     )
 
     if (loading) {
@@ -200,54 +324,94 @@ export default function OwnerBenefitReviews() {
 
     return (
         <div className="space-y-6">
+
+            {/* Header */}
+
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-800">
                         Staff Meals & Transport
                     </h1>
+
                     <p className="mt-1 text-sm text-gray-500">
                         Review, approve or reject staff benefit requests submitted by management.
                     </p>
                 </div>
 
                 <button
+                    type="button"
                     onClick={() => loadRequests(true)}
-                    disabled={refreshing}
+                    disabled={refreshing || reviewing !== ''}
                     className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
-                    <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+                    <RefreshCw
+                        className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
+                    />
                     Refresh
                 </button>
             </div>
 
+            {/* Messages */}
+
             {message && (
-                <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700">
+                <div className="flex items-start gap-2 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
                     {message}
                 </div>
             )}
 
             {error && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     {error}
                 </div>
             )}
 
+            {/* Statistics */}
+
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                    <p className="text-sm font-medium text-amber-700">Pending requests</p>
-                    <p className="mt-2 text-3xl font-bold text-amber-800">{pendingCount}</p>
+                    <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium text-amber-700">
+                            Pending requests
+                        </p>
+                        <Clock3 className="h-5 w-5 text-amber-600" />
+                    </div>
+
+                    <p className="mt-2 text-3xl font-bold text-amber-800">
+                        {pendingCount}
+                    </p>
                 </div>
 
                 <div className="rounded-xl border border-green-200 bg-green-50 p-4">
-                    <p className="text-sm font-medium text-green-700">Approved requests</p>
-                    <p className="mt-2 text-3xl font-bold text-green-800">{approvedCount}</p>
+                    <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium text-green-700">
+                            Approved requests
+                        </p>
+                        <CheckCircle2 className="h-5 w-5 text-green-600" />
+                    </div>
+
+                    <p className="mt-2 text-3xl font-bold text-green-800">
+                        {approvedCount}
+                    </p>
                 </div>
 
                 <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-                    <p className="text-sm font-medium text-red-700">Rejected requests</p>
-                    <p className="mt-2 text-3xl font-bold text-red-800">{rejectedCount}</p>
+                    <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium text-red-700">
+                            Rejected requests
+                        </p>
+                        <XCircle className="h-5 w-5 text-red-600" />
+                    </div>
+
+                    <p className="mt-2 text-3xl font-bold text-red-800">
+                        {rejectedCount}
+                    </p>
                 </div>
             </div>
+
+            {/* Filters */}
 
             <div className="flex flex-wrap gap-2">
                 {[
@@ -257,6 +421,7 @@ export default function OwnerBenefitReviews() {
                     ['all', 'All requests']
                 ].map(([value, label]) => (
                     <button
+                        type="button"
                         key={value}
                         onClick={() => setFilter(value)}
                         className={`rounded-lg px-4 py-2 text-sm font-medium ${filter === value
@@ -265,20 +430,38 @@ export default function OwnerBenefitReviews() {
                             }`}
                     >
                         {label}
+
+                        <span className="ml-2 text-xs opacity-75">
+                            {value === 'pending'
+                                ? pendingCount
+                                : value === 'approved'
+                                    ? approvedCount
+                                    : value === 'rejected'
+                                        ? rejectedCount
+                                        : requests.length
+                            }
+                        </span>
                     </button>
                 ))}
             </div>
 
+            {/* Requests */}
+
             {filteredRequests.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center">
                     <FileText className="mx-auto h-10 w-10 text-gray-300" />
-                    <p className="mt-3 font-medium text-gray-700">No requests found</p>
+
+                    <p className="mt-3 font-medium text-gray-700">
+                        No requests found
+                    </p>
+
                     <p className="mt-1 text-sm text-gray-500">
                         There are no requests in this category.
                     </p>
                 </div>
             ) : (
                 <div className="space-y-4">
+
                     {filteredRequests.map(request => {
                         const recipients = Array.isArray(request.recipients)
                             ? request.recipients
@@ -288,40 +471,74 @@ export default function OwnerBenefitReviews() {
                         const isTeam = request.request_scope === 'team'
                         const isPending = request.status === 'pending'
 
+                        const currency = CURRENCIES.includes(request.currency)
+                            ? request.currency
+                            : 'USD'
+
+                        const isCurrentlyReviewing =
+                            reviewing === request.id
+
                         return (
                             <div
                                 key={request.id}
                                 className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm"
                             >
+
+                                {/* Request heading */}
+
                                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 p-4">
                                     <div className="flex items-center gap-3">
-                                        <div className={`rounded-lg p-3 ${isMeal
-                                                ? 'bg-orange-50 text-orange-600'
-                                                : 'bg-blue-50 text-blue-600'
-                                            }`}>
-                                            {isMeal
-                                                ? <Utensils className="h-5 w-5" />
-                                                : <Car className="h-5 w-5" />
-                                            }
+
+                                        <div
+                                            className={`rounded-lg p-3 ${isMeal
+                                                    ? 'bg-orange-50 text-orange-600'
+                                                    : 'bg-blue-50 text-blue-600'
+                                                }`}
+                                        >
+                                            {isMeal ? (
+                                                <Utensils className="h-5 w-5" />
+                                            ) : (
+                                                <Car className="h-5 w-5" />
+                                            )}
                                         </div>
 
                                         <div>
                                             <h2 className="font-semibold text-gray-800">
-                                                {isMeal ? 'Staff Meal Request' : 'Transport Request'}
+                                                {getRequestType(request.request_type)} Request
                                             </h2>
+
                                             <p className="text-xs text-gray-500">
-                                                {isTeam ? 'Entire staff team' : 'Individual employee'}
+                                                {isTeam
+                                                    ? 'Entire staff team'
+                                                    : 'Individual employee'
+                                                }
                                             </p>
                                         </div>
                                     </div>
 
-                                    <span className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${statusStyle(request.status)}`}>
-                                        {request.status}
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                        {isCurrentlyReviewing && (
+                                            <span className="text-xs text-blue-600">
+                                                Processing...
+                                            </span>
+                                        )}
+
+                                        <span
+                                            className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyle(request.status)}`}
+                                        >
+                                            {statusLabel(request.status)}
+                                        </span>
+                                    </div>
                                 </div>
 
                                 <div className="grid grid-cols-1 gap-5 p-4 lg:grid-cols-2">
+
+                                    {/* Left column */}
+
                                     <div className="space-y-4">
+
+                                        {/* Recipients */}
+
                                         <div>
                                             <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700">
                                                 <Users className="h-4 w-4" />
@@ -329,147 +546,263 @@ export default function OwnerBenefitReviews() {
                                             </p>
 
                                             {recipients.length > 0 ? (
-                                                <div className="space-y-2 rounded-lg bg-gray-50 p-3">
+                                                <div className="max-h-52 space-y-2 overflow-y-auto rounded-lg bg-gray-50 p-3">
                                                     {recipients.map((person, index) => (
                                                         <div
-                                                            key={person.id || `${person.staff_member_id || 'staff'}-${index}`}
-                                                            className="flex justify-between gap-3 text-sm"
+                                                            key={
+                                                                person.id ||
+                                                                `${person.staff_member_id || 'staff'}-${index}`
+                                                            }
+                                                            className="flex items-center justify-between gap-3 border-b border-gray-100 pb-2 last:border-0 last:pb-0"
                                                         >
-                                                            <span className="font-medium text-gray-700">
-                                                                {person.staff_name || 'Staff member'}
-                                                            </span>
-                                                            <span className="text-gray-500">
+                                                            <div className="flex min-w-0 items-center gap-2">
+                                                                <UserRound className="h-4 w-4 shrink-0 text-gray-400" />
+
+                                                                <span className="truncate text-sm font-medium text-gray-700">
+                                                                    {person.staff_name || 'Staff member'}
+                                                                </span>
+                                                            </div>
+
+                                                            <span className="shrink-0 text-xs text-gray-500">
                                                                 {person.position || ''}
                                                             </span>
                                                         </div>
                                                     ))}
                                                 </div>
                                             ) : (
-                                                <p className="text-sm text-gray-500">
+                                                <p className="rounded-lg bg-gray-50 p-3 text-sm text-gray-500">
                                                     No recipient details available.
+                                                </p>
+                                            )}
+
+                                            {isTeam && (
+                                                <p className="mt-2 text-xs text-gray-500">
+                                                    Team recipients reflect currently active staff members returned by the database.
                                                 </p>
                                             )}
                                         </div>
 
+                                        {/* Requested amounts */}
+
                                         <div className="grid grid-cols-2 gap-3">
+
                                             <div className="rounded-lg bg-gray-50 p-3">
-                                                <p className="text-xs text-gray-500">Requested quantity</p>
+                                                <p className="text-xs text-gray-500">
+                                                    Requested quantity
+                                                </p>
+
                                                 <p className="mt-1 font-semibold text-gray-800">
                                                     {request.requested_quantity ?? '—'}
                                                 </p>
                                             </div>
 
                                             <div className="rounded-lg bg-gray-50 p-3">
-                                                <p className="text-xs text-gray-500">Requested amount</p>
-                                                <p className="mt-1 font-semibold text-gray-800">
-                                                    {formatMoney(request.requested_amount, request.currency)}
+                                                <p className="text-xs text-gray-500">
+                                                    Requested amount
+                                                </p>
+
+                                                <p className="mt-1 break-words font-semibold text-gray-800">
+                                                    {formatMoney(
+                                                        request.requested_amount,
+                                                        currency
+                                                    )}
                                                 </p>
                                             </div>
                                         </div>
 
-                                        <div className="space-y-1 text-sm text-gray-600">
+                                        {/* Dates */}
+
+                                        <div className="space-y-2 text-sm text-gray-600">
+
                                             {request.requested_for_date && (
                                                 <p className="flex items-center gap-2">
-                                                    <CalendarDays className="h-4 w-4" />
-                                                    Requested date: {formatDate(request.requested_for_date)}
+                                                    <CalendarDays className="h-4 w-4 shrink-0" />
+                                                    <span>
+                                                        Requested date:{' '}
+                                                        <strong className="font-medium text-gray-800">
+                                                            {formatDate(request.requested_for_date)}
+                                                        </strong>
+                                                    </span>
                                                 </p>
                                             )}
 
                                             {(request.period_start_date || request.period_end_date) && (
                                                 <p className="flex items-center gap-2">
-                                                    <CalendarDays className="h-4 w-4" />
-                                                    Period: {formatDate(request.period_start_date)} – {formatDate(request.period_end_date)}
+                                                    <CalendarDays className="h-4 w-4 shrink-0" />
+                                                    <span>
+                                                        Period:{' '}
+                                                        <strong className="font-medium text-gray-800">
+                                                            {formatDate(request.period_start_date)}
+                                                            {' – '}
+                                                            {formatDate(request.period_end_date)}
+                                                        </strong>
+                                                    </span>
                                                 </p>
                                             )}
 
                                             <p className="flex items-center gap-2">
-                                                <Clock3 className="h-4 w-4" />
-                                                Submitted: {formatDateTime(request.created_at)}
+                                                <Clock3 className="h-4 w-4 shrink-0" />
+                                                <span>
+                                                    Submitted:{' '}
+                                                    <strong className="font-medium text-gray-800">
+                                                        {formatDateTime(request.created_at)}
+                                                    </strong>
+                                                </span>
                                             </p>
                                         </div>
 
-                                        <div>
-                                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                                Reason
+                                        {/* Reason */}
+
+                                        <div className="rounded-lg border border-gray-100 p-3">
+                                            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                                <MessageSquare className="h-4 w-4" />
+                                                Request reason
                                             </p>
-                                            <p className="mt-1 whitespace-pre-wrap text-sm text-gray-700">
+
+                                            <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
                                                 {request.request_reason || 'No reason provided.'}
                                             </p>
                                         </div>
+
                                     </div>
 
+                                    {/* Right column */}
+
                                     <div className="space-y-4">
+
                                         {isPending ? (
                                             <>
+
+                                                {/* Approved amount */}
+
                                                 <div>
-                                                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                                                        Approved amount ({request.currency || 'USD'})
+                                                    <label
+                                                        htmlFor={`approved-amount-${request.id}`}
+                                                        className="mb-1 block text-sm font-medium text-gray-700"
+                                                    >
+                                                        Approved amount ({currency})
                                                     </label>
-                                                    <input
-                                                        type="number"
-                                                        min="0"
-                                                        step="0.01"
-                                                        value={approvedAmounts[request.id] ?? ''}
-                                                        onChange={event => setApprovedAmounts(previous => ({
-                                                            ...previous,
-                                                            [request.id]: event.target.value
-                                                        }))}
-                                                        placeholder="Leave blank if no amount applies"
-                                                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                                                    />
+
+                                                    <div className="relative">
+                                                        <Wallet className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+
+                                                        <input
+                                                            id={`approved-amount-${request.id}`}
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.01"
+                                                            inputMode="decimal"
+                                                            value={approvedAmounts[request.id] ?? ''}
+                                                            onChange={event => {
+                                                                setApprovedAmounts(previous => ({
+                                                                    ...previous,
+                                                                    [request.id]: event.target.value
+                                                                }))
+                                                            }}
+                                                            disabled={reviewing !== ''}
+                                                            placeholder="Enter approved amount"
+                                                            className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-gray-100"
+                                                        />
+                                                    </div>
+
                                                     <p className="mt-1 text-xs text-gray-500">
-                                                        You may approve a different amount from the amount requested.
+                                                        You may approve a different amount from the amount requested. Leave blank if no amount is being specified.
                                                     </p>
                                                 </div>
 
+                                                {/* Owner notes */}
+
                                                 <div>
-                                                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                                                    <label
+                                                        htmlFor={`owner-notes-${request.id}`}
+                                                        className="mb-1 block text-sm font-medium text-gray-700"
+                                                    >
                                                         Owner notes
+                                                        {request.status === 'pending' && (
+                                                            <span className="ml-1 font-normal text-gray-400">
+                                                                (required for rejection)
+                                                            </span>
+                                                        )}
                                                     </label>
+
                                                     <textarea
-                                                        rows="3"
+                                                        id={`owner-notes-${request.id}`}
+                                                        rows="4"
                                                         value={ownerNotes[request.id] ?? ''}
-                                                        onChange={event => setOwnerNotes(previous => ({
-                                                            ...previous,
-                                                            [request.id]: event.target.value
-                                                        }))}
+                                                        onChange={event => {
+                                                            setOwnerNotes(previous => ({
+                                                                ...previous,
+                                                                [request.id]: event.target.value
+                                                            }))
+                                                        }}
+                                                        disabled={reviewing !== ''}
                                                         placeholder="Add instructions or a reason for your decision..."
-                                                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                                                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-gray-100"
                                                     />
                                                 </div>
 
+                                                {/* Review buttons */}
+
                                                 <div className="flex flex-wrap gap-3">
+
                                                     <button
+                                                        type="button"
                                                         onClick={() => reviewRequest(request, 'approved')}
-                                                        disabled={reviewing === request.id}
-                                                        className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                                                        disabled={reviewing !== ''}
+                                                        className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
                                                     >
-                                                        {reviewing === request.id
-                                                            ? <LoaderCircle className="h-4 w-4 animate-spin" />
-                                                            : <CheckCircle2 className="h-4 w-4" />
-                                                        }
+                                                        {isCurrentlyReviewing ? (
+                                                            <LoaderCircle className="h-4 w-4 animate-spin" />
+                                                        ) : (
+                                                            <CheckCircle2 className="h-4 w-4" />
+                                                        )}
+
                                                         Approve
                                                     </button>
 
                                                     <button
+                                                        type="button"
                                                         onClick={() => reviewRequest(request, 'rejected')}
-                                                        disabled={reviewing === request.id}
-                                                        className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                                                        disabled={reviewing !== ''}
+                                                        className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                                                     >
                                                         <XCircle className="h-4 w-4" />
                                                         Reject
                                                     </button>
+
                                                 </div>
                                             </>
                                         ) : (
-                                            <div className="space-y-3 rounded-lg bg-gray-50 p-4">
+
+                                            /* Completed review */
+
+                                            <div className="space-y-4 rounded-lg bg-gray-50 p-4">
+
+                                                <div>
+                                                    <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                                        <BadgeCheck className="h-4 w-4" />
+                                                        Review outcome
+                                                    </p>
+
+                                                    <p className="mt-2 font-semibold text-gray-800">
+                                                        {request.status === 'approved'
+                                                            ? 'Approved'
+                                                            : 'Rejected'
+                                                        }
+                                                    </p>
+                                                </div>
+
                                                 <div>
                                                     <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                                                         Approved amount
                                                     </p>
+
                                                     <p className="mt-1 font-semibold text-gray-800">
                                                         {request.status === 'approved'
-                                                            ? formatMoney(request.approved_amount, request.currency)
+                                                            ? formatMoney(
+                                                                request.approved_amount,
+                                                                currency
+                                                            )
                                                             : 'Not approved'
                                                         }
                                                     </p>
@@ -479,23 +812,52 @@ export default function OwnerBenefitReviews() {
                                                     <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                                                         Owner notes
                                                     </p>
-                                                    <p className="mt-1 whitespace-pre-wrap text-sm text-gray-700">
+
+                                                    <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
                                                         {request.owner_notes || 'No notes added.'}
                                                     </p>
                                                 </div>
 
-                                                <div className="text-xs text-gray-500">
-                                                    Reviewed: {formatDateTime(request.reviewed_at)}
+                                                <div className="border-t border-gray-200 pt-3">
+                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                                        Reviewed on
+                                                    </p>
+
+                                                    <p className="mt-1 text-sm text-gray-700">
+                                                        {formatDateTime(request.reviewed_at)}
+                                                    </p>
                                                 </div>
+
                                             </div>
                                         )}
+
                                     </div>
                                 </div>
                             </div>
                         )
                     })}
+
                 </div>
             )}
+
+            {/* Footer information */}
+
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+                <div className="flex items-start gap-3">
+                    <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+
+                    <div>
+                        <p className="text-sm font-semibold text-blue-900">
+                            Benefit approval information
+                        </p>
+
+                        <p className="mt-1 text-sm leading-relaxed text-blue-800">
+                            Approving or rejecting a request records the Owner's decision only. It does not automatically create an expense, pay an employee, deduct cash, or post a financial journal entry. Any subsequent fulfilment or payment must follow the appropriate financial workflow.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
         </div>
     )
 }

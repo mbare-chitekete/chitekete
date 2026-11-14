@@ -4,10 +4,35 @@ import { supabase } from './supabase'
 
 const CurrencyContext = createContext(null)
 
+export const SUPPORTED_CURRENCIES = [
+    { code: 'USD', name: 'US Dollar', symbol: '$' },
+    { code: 'ZAR', name: 'South African Rand', symbol: 'R' },
+    { code: 'ZWG', name: 'Zimbabwe Gold', symbol: 'ZiG' }
+]
+
 const CURRENCY_SYMBOLS = {
     USD: '$',
     ZAR: 'R',
     ZWG: 'ZiG'
+}
+
+const SUPPORTED_CODES = SUPPORTED_CURRENCIES.map(
+    currency => currency.code
+)
+
+// Formats an amount using the specified currency.
+// Defaults to USD if no valid currency is supplied.
+export function formatMoney(value, currency = 'USD') {
+    const amount = Number(value) || 0
+    const code = SUPPORTED_CODES.includes(currency) ? currency : 'USD'
+    const symbol = CURRENCY_SYMBOLS[code]
+
+    const formattedAmount = new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    }).format(amount)
+
+    return `${symbol}${formattedAmount}`
 }
 
 export function CurrencyProvider({ children }) {
@@ -15,39 +40,75 @@ export function CurrencyProvider({ children }) {
     const [loadingCurrency, setLoadingCurrency] = useState(true)
 
     async function refreshCurrency() {
-        const { data, error } = await supabase
-            .from('canteen_settings')
-            .select('currency_code')
-            .eq('id', true)
-            .maybeSingle()
+        try {
+            const { data, error } = await supabase
+                .from('canteen_settings')
+                .select('currency_code')
+                .eq('id', true)
+                .maybeSingle()
 
-        if (error) {
-            console.error('Could not load currency:', error.message)
-            return
-        }
+            if (error) throw error
 
-        if (data?.currency_code && CURRENCY_SYMBOLS[data.currency_code]) {
-            setCurrencyCode(data.currency_code)
+            if (
+                data?.currency_code &&
+                SUPPORTED_CODES.includes(data.currency_code)
+            ) {
+                setCurrencyCode(data.currency_code)
+            }
+        } catch (error) {
+            console.error(
+                'Could not load currency:',
+                error.message || error
+            )
         }
     }
 
     useEffect(() => {
+        let active = true
+
         async function loadCurrency() {
-            await refreshCurrency()
-            setLoadingCurrency(false)
+            try {
+                const { data, error } = await supabase
+                    .from('canteen_settings')
+                    .select('currency_code')
+                    .eq('id', true)
+                    .maybeSingle()
+
+                if (error) throw error
+
+                if (
+                    active &&
+                    data?.currency_code &&
+                    SUPPORTED_CODES.includes(data.currency_code)
+                ) {
+                    setCurrencyCode(data.currency_code)
+                }
+            } catch (error) {
+                console.error(
+                    'Could not load currency:',
+                    error.message || error
+                )
+            } finally {
+                if (active) setLoadingCurrency(false)
+            }
         }
 
         loadCurrency()
+
+        return () => {
+            active = false
+        }
     }, [])
 
+    // Existing components continue using the Settings currency.
     function formatCurrency(value) {
-        const amount = Number(value) || 0
-        const symbol = CURRENCY_SYMBOLS[currencyCode] || '$'
+        return formatMoney(value, currencyCode)
+    }
 
-        return `${symbol}${new Intl.NumberFormat('en-US', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        }).format(amount)}`
+    // Use this for sales, purchases, expenses and other
+    // historical transactions with their own currency_code.
+    function formatTransactionCurrency(value, transactionCurrency) {
+        return formatMoney(value, transactionCurrency)
     }
 
     return (
@@ -56,8 +117,11 @@ export function CurrencyProvider({ children }) {
                 currencyCode,
                 currencySymbol: CURRENCY_SYMBOLS[currencyCode],
                 formatCurrency,
+                formatTransactionCurrency,
+                formatMoney,
                 refreshCurrency,
-                loadingCurrency
+                loadingCurrency,
+                supportedCurrencies: SUPPORTED_CURRENCIES
             }}
         >
             {children}

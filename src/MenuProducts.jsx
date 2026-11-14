@@ -4,8 +4,99 @@ import { supabase } from './supabase'
 import { useCurrency } from './CurrencyContext'
 import {
     Plus, Search, Edit2, X, Save,
-    Utensils, RefreshCw
+    RefreshCw, ImagePlus, Trash2, Upload
 } from 'lucide-react'
+
+const STORAGE_BUCKET = 'chitekete'
+const MAX_IMAGE_SIZE = 450 * 1024
+
+async function compressProductImage(file) {
+    if (!file || !file.type.startsWith('image/')) {
+        throw new Error('Please select a valid image.')
+    }
+
+    if (!window.createImageBitmap) {
+        if (file.size > MAX_IMAGE_SIZE) {
+            throw new Error(
+                'This browser cannot compress the image. Please select an image smaller than 450 KB.'
+            )
+        }
+        return file
+    }
+
+    const bitmap = await createImageBitmap(file)
+
+    try {
+        const canvas = document.createElement('canvas')
+
+        let width = bitmap.width
+        let height = bitmap.height
+
+        const maxDimension = 1600
+
+        if (width > maxDimension || height > maxDimension) {
+            const scale = maxDimension / Math.max(width, height)
+            width = Math.round(width * scale)
+            height = Math.round(height * scale)
+        }
+
+        const context = canvas.getContext('2d')
+
+        if (!context) {
+            throw new Error('Could not process this image.')
+        }
+
+        let blob = null
+        let quality = 0.85
+
+        while (true) {
+            canvas.width = width
+            canvas.height = height
+
+            context.clearRect(0, 0, width, height)
+            context.drawImage(bitmap, 0, 0, width, height)
+
+            blob = await new Promise(resolve =>
+                canvas.toBlob(resolve, 'image/webp', quality)
+            )
+
+            if (!blob) {
+                throw new Error('Could not compress this image.')
+            }
+
+            if (blob.size <= MAX_IMAGE_SIZE) {
+                break
+            }
+
+            if (quality > 0.4) {
+                quality = Math.max(0.4, quality - 0.1)
+                continue
+            }
+
+            if (width <= 500) {
+                break
+            }
+
+            width = Math.max(500, Math.round(width * 0.8))
+            height = Math.max(1, Math.round(height * 0.8))
+        }
+
+        if (!blob || blob.size > MAX_IMAGE_SIZE) {
+            throw new Error(
+                'Image is too large after compression. Please choose another image.'
+            )
+        }
+
+        return new File(
+            [blob],
+            `${Date.now()}.webp`,
+            { type: 'image/webp' }
+        )
+    } finally {
+        bitmap.close()
+    }
+}
+
 
 export default function MenuProducts() {
     const { formatCurrency } = useCurrency()
@@ -14,12 +105,16 @@ export default function MenuProducts() {
     const [categories, setCategories] = useState([])
     const [loading, setLoading] = useState(true)
     const [saving, setSaving] = useState(false)
+    const [uploading, setUploading] = useState(false)
     const [search, setSearch] = useState('')
     const [selectedCategory, setSelectedCategory] = useState('All')
     const [showForm, setShowForm] = useState(false)
     const [editingId, setEditingId] = useState(null)
     const [message, setMessage] = useState('')
     const [error, setError] = useState('')
+    const [imageFile, setImageFile] = useState(null)
+    const [imagePreview, setImagePreview] = useState('')
+    const [removeImage, setRemoveImage] = useState(false)
 
     const emptyForm = {
         name: '',
@@ -36,6 +131,15 @@ export default function MenuProducts() {
         loadData()
     }, [])
 
+    // Release temporary browser preview URLs.
+    useEffect(() => {
+        return () => {
+            if (imagePreview?.startsWith('blob:')) {
+                URL.revokeObjectURL(imagePreview)
+            }
+        }
+    }, [imagePreview])
+
     async function loadData() {
         setLoading(true)
         setError('')
@@ -49,7 +153,17 @@ export default function MenuProducts() {
 
             supabase
                 .from('menu_items')
-                .select('id, category_id, name, unit, selling_price, active, current_quantity, minimum_quantity')
+                .select(`
+                    id,
+                    category_id,
+                    name,
+                    unit,
+                    selling_price,
+                    active,
+                    current_quantity,
+                    minimum_quantity,
+                    image_url
+                `)
                 .order('name')
         ])
 
@@ -66,12 +180,25 @@ export default function MenuProducts() {
         setLoading(false)
     }
 
+    function clearImageSelection() {
+        if (imagePreview?.startsWith('blob:')) {
+            URL.revokeObjectURL(imagePreview)
+        }
+
+        setImageFile(null)
+        setImagePreview('')
+        setRemoveImage(true)
+    }
+
     function openAddForm() {
         setEditingId(null)
         setForm({
             ...emptyForm,
             category_id: categories[0]?.id || ''
         })
+        setImageFile(null)
+        setImagePreview('')
+        setRemoveImage(false)
         setMessage('')
         setError('')
         setShowForm(true)
@@ -87,9 +214,66 @@ export default function MenuProducts() {
             current_quantity: String(item.current_quantity ?? 0),
             minimum_quantity: String(item.minimum_quantity ?? 0)
         })
+        setImageFile(null)
+        setImagePreview(item.image_url || '')
+        setRemoveImage(false)
         setMessage('')
         setError('')
         setShowForm(true)
+    }
+
+    function handleImageSelection(e) {
+        const file = e.target.files?.[0]
+        e.target.value = ''
+
+        if (!file) return
+
+        if (!file.type.startsWith('image/')) {
+            setError('Please select a valid image file.')
+            return
+        }
+
+        if (imagePreview?.startsWith('blob:')) {
+            URL.revokeObjectURL(imagePreview)
+        }
+
+        setImageFile(file)
+        setImagePreview(URL.createObjectURL(file))
+        setRemoveImage(false)
+        setError('')
+    }
+
+    async function uploadProductImage(productId) {
+        setUploading(true)
+
+        try {
+            const compressedFile = await compressProductImage(imageFile)
+
+            const imagePath =
+                `products/${productId}/${crypto.randomUUID()}.webp`
+
+            const { error: uploadError } = await supabase.storage
+                .from(STORAGE_BUCKET)
+                .upload(imagePath, compressedFile, {
+                    contentType: compressedFile.type,
+                    cacheControl: '3600',
+                    upsert: false
+                })
+
+            if (uploadError) throw uploadError
+
+            const { data } = supabase.storage
+                .from(STORAGE_BUCKET)
+                .getPublicUrl(imagePath)
+
+            if (!data?.publicUrl) {
+                throw new Error('Could not generate the public image URL.')
+            }
+
+            return data.publicUrl
+        } finally {
+            setUploading(false)
+        }
     }
 
     async function handleSave(e) {
@@ -98,51 +282,97 @@ export default function MenuProducts() {
         setError('')
         setMessage('')
 
-        const price = Number(form.selling_price)
+        try {
+            const price = Number(form.selling_price)
+            const minimumQuantity = Number(form.minimum_quantity)
 
-        if (!form.name.trim() || !form.category_id || !form.unit.trim()) {
-            setError('Please complete all fields.')
-            setSaving(false)
-            return
-        }
+            if (
+                !form.name.trim() ||
+                !form.category_id ||
+                !form.unit.trim()
+            ) {
+                throw new Error('Please complete all required fields.')
+            }
 
-        if (!Number.isFinite(price) || price < 0) {
-            setError('Enter a valid selling price.')
-            setSaving(false)
-            return
-        }
+            if (!Number.isFinite(price) || price < 0) {
+                throw new Error('Enter a valid selling price.')
+            }
 
-        const productData = {
-            name: form.name.trim(),
-            category_id: form.category_id,
-            unit: form.unit.trim(),
-            selling_price: price,
-            minimum_quantity: Math.max(0, Number(form.minimum_quantity) || 0)
-        }
+            if (!Number.isFinite(minimumQuantity) || minimumQuantity < 0) {
+                throw new Error('Enter a valid minimum stock quantity.')
+            }
 
-        const result = editingId
-            ? await supabase
-                .from('menu_items')
-                .update(productData)
-                .eq('id', editingId)
-            : await supabase
-                .from('menu_items')
-                .insert(productData)
+            const productData = {
+                name: form.name.trim(),
+                category_id: form.category_id,
+                unit: form.unit.trim(),
+                selling_price: price,
+                minimum_quantity: minimumQuantity
+            }
 
-        if (result.error) {
-            setError(result.error.message)
-        } else {
+            let productId = editingId
+
+            // Save the product details first.
+            if (editingId) {
+                const { error: updateError } = await supabase
+                    .from('menu_items')
+                    .update(productData)
+                    .eq('id', editingId)
+
+                if (updateError) throw updateError
+            } else {
+                const { data, error: insertError } = await supabase
+                    .from('menu_items')
+                    .insert(productData)
+                    .select('id')
+                    .single()
+
+                if (insertError) throw insertError
+                productId = data.id
+            }
+
+            // Upload a new image if one was selected.
+            if (imageFile) {
+                const imageUrl = await uploadProductImage(productId)
+
+                const { error: imageUpdateError } = await supabase
+                    .from('menu_items')
+                    .update({ image_url: imageUrl })
+                    .eq('id', productId)
+
+                if (imageUpdateError) {
+                    throw new Error(
+                        `Product details were saved, but the image could not be linked: ${imageUpdateError.message}`
+                    )
+                }
+            } else if (removeImage) {
+                const { error: imageUpdateError } = await supabase
+                    .from('menu_items')
+                    .update({ image_url: null })
+                    .eq('id', productId)
+
+                if (imageUpdateError) throw imageUpdateError
+            }
+
             setShowForm(false)
             setForm(emptyForm)
+            setImageFile(null)
+            setImagePreview('')
+            setRemoveImage(false)
+
             await loadData()
+
             setMessage(
                 editingId
                     ? 'Product updated successfully.'
                     : 'Product added successfully.'
             )
+        } catch (err) {
+            setError(err.message || 'Could not save product.')
+            await loadData()
+        } finally {
+            setSaving(false)
         }
-
-        setSaving(false)
     }
 
     async function toggleActive(item) {
@@ -218,6 +448,13 @@ export default function MenuProducts() {
             color: '#fff',
             fontWeight: 600,
             cursor: 'pointer'
+        },
+        imagePreview: {
+            width: '100%',
+            maxHeight: 190,
+            objectFit: 'contain',
+            borderRadius: 10,
+            background: '#f6f8fa'
         }
     }
 
@@ -235,7 +472,7 @@ export default function MenuProducts() {
                         Menu & Products
                     </h2>
                     <p style={{ color: '#718096', margin: '7px 0 0' }}>
-                        Manage your canteen menu, products and selling prices.
+                        Manage your canteen menu, products, images and selling prices.
                     </p>
                 </div>
 
@@ -359,6 +596,7 @@ export default function MenuProducts() {
                             background: '#edf3f1',
                             color: '#28785f'
                         }}
+                        title="Refresh products"
                     >
                         <RefreshCw size={16} />
                     </button>
@@ -388,7 +626,7 @@ export default function MenuProducts() {
                             width: '100%',
                             borderCollapse: 'collapse',
                             fontSize: 14,
-                            minWidth: 650
+                            minWidth: 760
                         }}>
                             <thead>
                                 <tr style={{
@@ -396,6 +634,7 @@ export default function MenuProducts() {
                                     textAlign: 'left'
                                 }}>
                                     {[
+                                        'Image',
                                         'Product',
                                         'Category',
                                         'Unit',
@@ -405,13 +644,10 @@ export default function MenuProducts() {
                                         'Status',
                                         'Actions'
                                     ].map(label => (
-                                        <th
-                                            key={label}
-                                            style={{
-                                                padding: 13,
-                                                color: '#718096'
-                                            }}
-                                        >
+                                        <th key={label} style={{
+                                            padding: 13,
+                                            color: '#718096'
+                                        }}>
                                             {label}
                                         </th>
                                     ))}
@@ -431,6 +667,34 @@ export default function MenuProducts() {
                                                 borderTop: '1px solid #edf0f3'
                                             }}
                                         >
+                                            <td style={{ padding: 9 }}>
+                                                {item.image_url ? (
+                                                    <img
+                                                        src={item.image_url}
+                                                        alt={item.name}
+                                                        loading="lazy"
+                                                        style={{
+                                                            width: 48,
+                                                            height: 48,
+                                                            objectFit: 'cover',
+                                                            borderRadius: 8
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <div style={{
+                                                        width: 48,
+                                                        height: 48,
+                                                        borderRadius: 8,
+                                                        background: '#f1f5f4',
+                                                        display: 'grid',
+                                                        placeItems: 'center',
+                                                        color: '#8492a6'
+                                                    }}>
+                                                        <ImagePlus size={20} />
+                                                    </div>
+                                                )}
+                                            </td>
+
                                             <td style={{
                                                 padding: 13,
                                                 fontWeight: 600
@@ -453,17 +717,18 @@ export default function MenuProducts() {
                                                 {formatCurrency(item.selling_price)}
                                             </td>
 
-                                            <td style={{ padding: 13 }}>{Number(item.current_quantity || 0)} {item.unit}</td>
-                                            <td style={{ padding: 13 }}>{Number(item.minimum_quantity || 0)} {item.unit}</td>
+                                            <td style={{ padding: 13 }}>
+                                                {Number(item.current_quantity || 0)} {item.unit}
+                                            </td>
+
+                                            <td style={{ padding: 13 }}>
+                                                {Number(item.minimum_quantity || 0)} {item.unit}
+                                            </td>
 
                                             <td style={{ padding: 13 }}>
                                                 <span style={{
-                                                    color: item.active
-                                                        ? '#28785f'
-                                                        : '#b42318',
-                                                    background: item.active
-                                                        ? '#eaf6f0'
-                                                        : '#fff1f0',
+                                                    color: item.active ? '#28785f' : '#b42318',
+                                                    background: item.active ? '#eaf6f0' : '#fff1f0',
                                                     padding: '5px 9px',
                                                     borderRadius: 20,
                                                     fontSize: 12
@@ -475,7 +740,7 @@ export default function MenuProducts() {
                                             <td style={{ padding: 13 }}>
                                                 <button
                                                     onClick={() => openEditForm(item)}
-                                                    title="Edit product"
+                                                    title="Edit product and image"
                                                     style={{
                                                         border: 0,
                                                         background: '#edf3f1',
@@ -500,9 +765,7 @@ export default function MenuProducts() {
                                                         fontSize: 12
                                                     }}
                                                 >
-                                                    {item.active
-                                                        ? 'Deactivate'
-                                                        : 'Activate'}
+                                                    {item.active ? 'Deactivate' : 'Activate'}
                                                 </button>
                                             </td>
                                         </tr>
@@ -522,7 +785,8 @@ export default function MenuProducts() {
                     display: 'grid',
                     placeItems: 'center',
                     padding: 16,
-                    zIndex: 1000
+                    zIndex: 1000,
+                    overflowY: 'auto'
                 }}>
                     <form
                         onSubmit={handleSave}
@@ -531,7 +795,9 @@ export default function MenuProducts() {
                             borderRadius: 16,
                             padding: 25,
                             width: '100%',
-                            maxWidth: 440,
+                            maxWidth: 480,
+                            maxHeight: '92vh',
+                            overflowY: 'auto',
                             boxSizing: 'border-box',
                             display: 'grid',
                             gap: 15
@@ -631,25 +897,128 @@ export default function MenuProducts() {
                                 min="0"
                                 step="0.001"
                                 value={form.minimum_quantity}
-                                onChange={e => setForm({ ...form, minimum_quantity: e.target.value })}
+                                onChange={e => setForm({
+                                    ...form,
+                                    minimum_quantity: e.target.value
+                                })}
                                 style={{ ...styles.input, marginTop: 7 }}
                             />
                         </label>
 
+                        {/* PRODUCT IMAGE UPLOAD */}
+                        <div style={{
+                            border: '1px solid #dce3eb',
+                            borderRadius: 12,
+                            padding: 14,
+                            display: 'grid',
+                            gap: 10
+                        }}>
+                            <strong>Product image</strong>
+
+                            {imagePreview ? (
+                                <img
+                                    src={imagePreview}
+                                    alt="Product preview"
+                                    style={styles.imagePreview}
+                                />
+                            ) : (
+                                <div style={{
+                                    minHeight: 115,
+                                    borderRadius: 10,
+                                    background: '#f6f8fa',
+                                    display: 'grid',
+                                    placeItems: 'center',
+                                    color: '#8492a6'
+                                }}>
+                                    <div style={{ textAlign: 'center' }}>
+                                        <ImagePlus size={30} />
+                                        <p style={{ margin: '7px 0 0', fontSize: 13 }}>
+                                            No product image selected
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+
+                            <label
+                                style={{
+                                    ...styles.button,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: 8,
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                <Upload size={16} />
+                                {imagePreview ? 'Choose Another Image' : 'Upload Product Image'}
+                                <input
+                                    type="file"
+                                    accept="image/jpeg,image/png,image/webp"
+                                    onChange={handleImageSelection}
+                                    style={{ display: 'none' }}
+                                />
+                            </label>
+
+                            {imageFile && (
+                                <p style={{
+                                    color: '#28785f',
+                                    fontSize: 12,
+                                    margin: 0
+                                }}>
+                                    Selected: {imageFile.name}
+                                </p>
+                            )}
+
+                            {editingId && imagePreview && (
+                                <button
+                                    type="button"
+                                    onClick={clearImageSelection}
+                                    style={{
+                                        border: '1px solid #f0c8c5',
+                                        color: '#b42318',
+                                        background: '#fff',
+                                        borderRadius: 8,
+                                        padding: 9,
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        justifyContent: 'center',
+                                        alignItems: 'center',
+                                        gap: 7
+                                    }}
+                                >
+                                    <Trash2 size={15} />
+                                    Remove Product Image
+                                </button>
+                            )}
+
+                            <small style={{ color: '#718096' }}>
+                                JPG, PNG or WebP. Images are automatically compressed before upload.
+                            </small>
+                        </div>
+
                         {error && (
-                            <p style={{ color: '#b42318', margin: 0 }}>
+                            <p style={{
+                                color: '#b42318',
+                                background: '#fff1f0',
+                                padding: 10,
+                                borderRadius: 8,
+                                margin: 0
+                            }}>
                                 {error}
                             </p>
                         )}
 
                         <button
-                            type="submit"
-                            disabled={saving}
-                            style={styles.button}
+                            type="button"
+                            disabled={saving || uploading}
+                            onClick={() => setShowForm(false)}
+                            style={{
+                                border: 0,
+                                background: 'transparent',
+                                cursor: 'pointer'
+                            }}
                         >
-                            <Save size={16} style={{ verticalAlign: 'middle' }} />
-                            {' '}
-                            {saving ? 'Saving...' : 'Save Product'}
+                            <X />
                         </button>
                     </form>
                 </div>

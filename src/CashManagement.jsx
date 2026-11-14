@@ -6,6 +6,7 @@ import {
     FileText, Printer
 } from 'lucide-react'
 import { supabase } from './supabase'
+import { useCurrency } from './CurrencyContext'
 
 const CURRENCIES = ['USD', 'ZAR', 'ZWG']
 
@@ -23,6 +24,7 @@ const today = () => {
 
 const money = (amount, currency) => {
     const value = Number(amount || 0)
+
     try {
         return new Intl.NumberFormat('en-US', {
             style: 'currency',
@@ -69,79 +71,150 @@ const allocationCategories = [
 const styles = {
     page: { padding: 24, color: '#162b42' },
     header: {
-        display: 'flex', justifyContent: 'space-between',
-        alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 22
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap',
+        marginBottom: 22
     },
     title: { margin: 0, fontSize: 25, fontWeight: 800 },
     subtitle: { color: '#718096', marginTop: 5, fontSize: 13 },
     button: {
-        display: 'inline-flex', alignItems: 'center', gap: 7,
-        border: 'none', borderRadius: 9, padding: '10px 14px',
-        background: '#176b45', color: 'white', fontWeight: 700,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        border: 'none',
+        borderRadius: 9,
+        padding: '10px 14px',
+        background: '#176b45',
+        color: 'white',
+        fontWeight: 700,
         cursor: 'pointer'
     },
     secondary: {
-        display: 'inline-flex', alignItems: 'center', gap: 7,
-        border: '1px solid #dce4ec', borderRadius: 9,
-        padding: '10px 13px', background: 'white',
-        color: '#263b50', fontWeight: 600, cursor: 'pointer'
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        border: '1px solid #dce4ec',
+        borderRadius: 9,
+        padding: '10px 13px',
+        background: 'white',
+        color: '#263b50',
+        fontWeight: 600,
+        cursor: 'pointer'
     },
     cards: {
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(175px,1fr))',
-        gap: 14, marginBottom: 20
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(175px,1fr))',
+        gap: 14,
+        marginBottom: 20
     },
     card: {
-        background: 'white', border: '1px solid #e6ebf1',
-        borderRadius: 13, padding: 17
+        background: 'white',
+        border: '1px solid #e6ebf1',
+        borderRadius: 13,
+        padding: 17
     },
     cardLabel: {
-        color: '#718096', fontSize: 12, fontWeight: 600,
-        display: 'flex', alignItems: 'center', gap: 6
+        color: '#718096',
+        fontSize: 12,
+        fontWeight: 600,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6
     },
     cardValue: { fontSize: 21, fontWeight: 800, marginTop: 9 },
     filters: {
-        display: 'flex', flexWrap: 'wrap', gap: 10,
-        marginBottom: 14, alignItems: 'end'
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 10,
+        marginBottom: 14,
+        alignItems: 'end'
     },
     input: {
-        width: '100%', boxSizing: 'border-box', padding: '10px 12px',
-        border: '1px solid #dce4ec', borderRadius: 8,
-        background: 'white', color: '#162b42', fontSize: 13
+        width: '100%',
+        boxSizing: 'border-box',
+        padding: '10px 12px',
+        border: '1px solid #dce4ec',
+        borderRadius: 8,
+        background: 'white',
+        color: '#162b42',
+        fontSize: 13
     },
-    field: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 },
+    field: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        minWidth: 0
+    },
     label: { fontSize: 12, fontWeight: 700, color: '#536579' },
     tableWrap: {
-        overflowX: 'auto', background: 'white',
-        border: '1px solid #e6ebf1', borderRadius: 12
+        overflowX: 'auto',
+        background: 'white',
+        border: '1px solid #e6ebf1',
+        borderRadius: 12
     },
-    table: { width: '100%', borderCollapse: 'collapse', minWidth: 1250 },
+    table: {
+        width: '100%',
+        borderCollapse: 'collapse',
+        minWidth: 1250
+    },
     th: {
-        textAlign: 'left', padding: '13px 12px',
-        background: '#f7f9fc', color: '#64748b',
-        fontSize: 11, textTransform: 'uppercase', whiteSpace: 'nowrap'
+        textAlign: 'left',
+        padding: '13px 12px',
+        background: '#f7f9fc',
+        color: '#64748b',
+        fontSize: 11,
+        textTransform: 'uppercase',
+        whiteSpace: 'nowrap'
     },
     td: {
-        padding: '13px 12px', borderTop: '1px solid #edf1f5',
-        fontSize: 13, whiteSpace: 'nowrap'
+        padding: '13px 12px',
+        borderTop: '1px solid #edf1f5',
+        fontSize: 13,
+        whiteSpace: 'nowrap'
     },
     modal: {
-        position: 'fixed', inset: 0, background: 'rgba(15,30,45,.55)',
-        display: 'flex', justifyContent: 'center', alignItems: 'center',
-        padding: 16, zIndex: 1000
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(15,30,45,.55)',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 16,
+        zIndex: 1000
     },
     modalBox: {
-        background: 'white', borderRadius: 15, padding: 22,
-        width: '100%', maxWidth: 650, maxHeight: '90vh', overflowY: 'auto'
+        background: 'white',
+        borderRadius: 15,
+        padding: 22,
+        width: '100%',
+        maxWidth: 650,
+        maxHeight: '90vh',
+        overflowY: 'auto'
     },
     formGrid: {
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))',
         gap: 14
     },
-    message: { padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }
+    message: {
+        padding: 12,
+        borderRadius: 8,
+        marginBottom: 14,
+        fontSize: 13
+    }
 }
 
 export default function CashManagement() {
-    const [currencyCode, setCurrencyCode] = useState('USD')
+    const { currencyCode: businessCurrencyCode = 'USD' } = useCurrency()
+
+    const [currencyCode, setCurrencyCode] = useState(
+        CURRENCIES.includes(businessCurrencyCode)
+            ? businessCurrencyCode
+            : 'USD'
+    )
 
     const [cashDays, setCashDays] = useState([])
     const [sales, setSales] = useState([])
@@ -174,6 +247,12 @@ export default function CashManagement() {
 
     const fmt = value => money(value, currencyCode)
 
+    useEffect(() => {
+        if (CURRENCIES.includes(businessCurrencyCode)) {
+            setCurrencyCode(businessCurrencyCode)
+        }
+    }, [businessCurrencyCode])
+
     const loadData = useCallback(async () => {
         setLoading(true)
         setError('')
@@ -190,10 +269,25 @@ export default function CashManagement() {
                 }),
 
                 supabase.from('purchases')
-                    .select('purchase_date,total_purchase,payment_method,currency_code,item_name,notes'),
+                    .select(`
+                        purchase_date,
+                        total_purchase,
+                        payment_method,
+                        currency_code,
+                        item_name,
+                        notes,
+                        receipt_status
+                    `),
 
                 supabase.from('expenses')
-                    .select('expense_date,description,amount,payment_method,currency_code,notes'),
+                    .select(`
+                        expense_date,
+                        description,
+                        amount,
+                        payment_method,
+                        currency_code,
+                        notes
+                    `),
 
                 supabase.from('cash_allocations')
                     .select('*')
@@ -222,121 +316,212 @@ export default function CashManagement() {
 
     useEffect(() => {
         loadData()
+
+        const fn = () => loadData()
+        window.addEventListener('refresh-canteen-dashboard', fn)
+
+        return () => {
+            window.removeEventListener('refresh-canteen-dashboard', fn)
+        }
     }, [loadData])
 
     const dailyRows = useMemo(() => {
+        const receivedPurchases = purchases.filter(
+            r => r.receipt_status === 'received'
+        )
+
         const dates = new Set([
-            ...cashDays.filter(r => r.currency_code === currencyCode).map(r => r.cash_date),
-            ...sales.filter(r => r.currency_code === currencyCode).map(r => r.sale_date),
-            ...purchases.filter(r => r.currency_code === currencyCode).map(r => r.purchase_date),
-            ...expenses.filter(r => r.currency_code === currencyCode).map(r => r.expense_date)
+            ...cashDays
+                .filter(r => r.currency_code === currencyCode)
+                .map(r => r.cash_date),
+
+            ...sales
+                .filter(r => r.currency_code === currencyCode)
+                .map(r => r.sale_date),
+
+            ...receivedPurchases
+                .filter(r => r.currency_code === currencyCode)
+                .map(r => r.purchase_date),
+
+            ...expenses
+                .filter(r => r.currency_code === currencyCode)
+                .map(r => r.expense_date)
         ])
 
-        return [...dates].sort((a, b) => b.localeCompare(a)).map(date => {
-            const position = cashDays.find(r =>
-                r.cash_date === date && r.currency_code === currencyCode
-            )
+        return [...dates]
+            .sort((a, b) => b.localeCompare(a))
+            .map(date => {
+                const position = cashDays.find(r =>
+                    r.cash_date === date &&
+                    r.currency_code === currencyCode
+                )
 
-            const daySales = sales.filter(r =>
-                r.sale_date === date && r.currency_code === currencyCode
-            )
-            const dayPurchases = purchases.filter(r =>
-                r.purchase_date === date && r.currency_code === currencyCode
-            )
-            const dayExpenses = expenses.filter(r =>
-                r.expense_date === date && r.currency_code === currencyCode
-            )
+                const daySales = sales.filter(r =>
+                    r.sale_date === date &&
+                    r.currency_code === currencyCode
+                )
 
-            const dayAllocations = position
-                ? allocations.filter(r => r.cash_day_id === position.id)
-                : []
+                const dayPurchases = receivedPurchases.filter(r =>
+                    r.purchase_date === date &&
+                    r.currency_code === currencyCode
+                )
 
-            const dayWithdrawals = position
-                ? withdrawals.filter(r => r.cash_day_id === position.id)
-                : []
+                const dayExpenses = expenses.filter(r =>
+                    r.expense_date === date &&
+                    r.currency_code === currencyCode
+                )
 
-            const sumSales = methods => daySales
-                .filter(r => methods.includes(r.payment_method))
-                .reduce((sum, r) => sum + Number(r.total_amount || 0), 0)
+                const dayAllocations = position
+                    ? allocations.filter(r => r.cash_day_id === position.id)
+                    : []
 
-            const cashSales = sumSales(['cash'])
-            const mobileMoney = sumSales(['mobile_money'])
-            const bankCard = sumSales(['bank_card', 'card', 'bank'])
-            const otherSales = daySales
-                .filter(r => !['cash', 'mobile_money', 'bank_card', 'card', 'bank'].includes(r.payment_method))
-                .reduce((sum, r) => sum + Number(r.total_amount || 0), 0)
+                const dayWithdrawals = position
+                    ? withdrawals.filter(r => r.cash_day_id === position.id)
+                    : []
 
-            const cashPurchases = dayPurchases
-                .filter(r => r.payment_method === 'cash')
-                .reduce((sum, r) => sum + Number(r.total_purchase || 0), 0)
+                const sumSales = methods => daySales
+                    .filter(r => methods.includes(r.payment_method))
+                    .reduce(
+                        (sum, r) => sum + Number(r.total_amount || 0),
+                        0
+                    )
 
-            const cashExpenses = dayExpenses
-                .filter(r => r.payment_method === 'cash')
-                .reduce((sum, r) => sum + Number(r.amount || 0), 0)
+                const cashSales = sumSales(['cash'])
+                const mobileMoney = sumSales(['mobile_money'])
+                const bankCard = sumSales(['bank_card', 'card', 'bank'])
 
-            const openingCash = Number(position?.opening_cash || 0)
-            const openingPurchaseReserve = Number(position?.opening_purchase_reserve || 0)
+                const otherSales = daySales
+                    .filter(r => ![
+                        'cash',
+                        'mobile_money',
+                        'bank_card',
+                        'card',
+                        'bank'
+                    ].includes(r.payment_method))
+                    .reduce(
+                        (sum, r) => sum + Number(r.total_amount || 0),
+                        0
+                    )
 
-            const expectedClosing =
-                openingCash + openingPurchaseReserve + cashSales -
-                cashPurchases - cashExpenses
+                const cashPurchases = dayPurchases
+                    .filter(r => r.payment_method === 'cash')
+                    .reduce(
+                        (sum, r) => sum + Number(r.total_purchase || 0),
+                        0
+                    )
 
-            const countedCash = position?.counted_cash == null
-                ? null
-                : Number(position.counted_cash)
+                const cashExpenses = dayExpenses
+                    .filter(r => r.payment_method === 'cash')
+                    .reduce(
+                        (sum, r) => sum + Number(r.amount || 0),
+                        0
+                    )
 
-            const difference = countedCash === null
-                ? null
-                : countedCash - expectedClosing
+                const openingCash = Number(position?.opening_cash || 0)
+                const openingPurchaseReserve = Number(
+                    position?.opening_purchase_reserve || 0
+                )
 
-            const allocationTotal = dayAllocations.reduce(
-                (sum, r) => sum + Number(r.amount || 0), 0
-            )
+                const expectedClosing =
+                    openingCash +
+                    openingPurchaseReserve +
+                    cashSales -
+                    cashPurchases -
+                    cashExpenses
 
-            const allocationValue = category => dayAllocations
-                .filter(r => r.category === category)
-                .reduce((sum, r) => sum + Number(r.amount || 0), 0)
+                const countedCash = position?.counted_cash == null
+                    ? null
+                    : Number(position.counted_cash)
 
-            const allocationStatus = countedCash === null
-                ? 'Awaiting Cash Count'
-                : Math.abs(allocationTotal - countedCash) <= 0.01
-                    ? 'Fully Allocated'
-                    : allocationTotal === 0
-                        ? 'Not Allocated'
-                        : 'Incomplete'
+                const difference = countedCash === null
+                    ? null
+                    : countedCash - expectedClosing
 
-            const closingStatus = position?.closed_at
-                ? 'Closed'
-                : countedCash === null
-                    ? 'Open'
-                    : difference < -0.01
-                        ? 'Shortage'
-                        : difference > 0.01
-                            ? 'Surplus'
-                            : 'Reconciled'
+                const allocationTotal = dayAllocations.reduce(
+                    (sum, r) => sum + Number(r.amount || 0),
+                    0
+                )
 
-            return {
-                date, position, daySales, dayPurchases, dayExpenses,
-                dayAllocations, dayWithdrawals, cashSales, mobileMoney,
-                bankCard, otherSales, cashPurchases, cashExpenses,
-                openingCash, openingPurchaseReserve, expectedClosing,
-                countedCash, difference, closingStatus, allocationTotal,
-                allocationStatus,
-                bankTransfer: allocationValue('bank_transfer'),
-                tillFloat: allocationValue('till_float'),
-                purchaseReserve: allocationValue('purchase_reserve'),
-                safeDeposit: allocationValue('safe_deposit'),
-                totalSales: cashSales + mobileMoney + bankCard + otherSales
-            }
-        })
-    }, [cashDays, sales, purchases, expenses, allocations, withdrawals, currencyCode])
+                const allocationValue = category => dayAllocations
+                    .filter(r => r.category === category)
+                    .reduce(
+                        (sum, r) => sum + Number(r.amount || 0),
+                        0
+                    )
+
+                const allocationStatus = countedCash === null
+                    ? 'Awaiting Cash Count'
+                    : Math.abs(allocationTotal - countedCash) <= 0.01
+                        ? 'Fully Allocated'
+                        : allocationTotal === 0
+                            ? 'Not Allocated'
+                            : allocationTotal > countedCash
+                                ? 'Over-allocated'
+                                : 'Incomplete'
+
+                const closingStatus = position?.closed_at
+                    ? 'Closed'
+                    : countedCash === null
+                        ? 'Open'
+                        : difference < -0.01
+                            ? 'Shortage'
+                            : difference > 0.01
+                                ? 'Surplus'
+                                : 'Reconciled'
+
+                return {
+                    date,
+                    position,
+                    daySales,
+                    dayPurchases,
+                    dayExpenses,
+                    dayAllocations,
+                    dayWithdrawals,
+                    cashSales,
+                    mobileMoney,
+                    bankCard,
+                    otherSales,
+                    cashPurchases,
+                    cashExpenses,
+                    openingCash,
+                    openingPurchaseReserve,
+                    expectedClosing,
+                    countedCash,
+                    difference,
+                    closingStatus,
+                    allocationTotal,
+                    allocationStatus,
+                    bankTransfer: allocationValue('bank_transfer'),
+                    tillFloat: allocationValue('till_float'),
+                    purchaseReserve: allocationValue('purchase_reserve'),
+                    safeDeposit: allocationValue('safe_deposit'),
+                    totalSales: cashSales + mobileMoney + bankCard + otherSales
+                }
+            })
+    }, [
+        cashDays,
+        sales,
+        purchases,
+        expenses,
+        allocations,
+        withdrawals,
+        currencyCode
+    ])
 
     const filteredRows = useMemo(() => dailyRows.filter(row => {
         const searchText = [
             row.date,
             row.position?.notes,
-            ...row.dayPurchases.flatMap(r => [r.item_name, r.payment_method, r.notes]),
-            ...row.dayExpenses.flatMap(r => [r.description, r.payment_method, r.notes]),
+            ...row.dayPurchases.flatMap(r => [
+                r.item_name,
+                r.payment_method,
+                r.notes
+            ]),
+            ...row.dayExpenses.flatMap(r => [
+                r.description,
+                r.payment_method,
+                r.notes
+            ]),
             ...row.dayAllocations.map(r => r.notes),
             ...row.dayWithdrawals.map(r => r.purpose)
         ].join(' ').toLowerCase()
@@ -344,16 +529,23 @@ export default function CashManagement() {
         return searchText.includes(search.toLowerCase()) &&
             (!startDate || row.date >= startDate) &&
             (!endDate || row.date <= endDate) &&
-            (statusFilter === 'all' || row.closingStatus.toLowerCase() === statusFilter)
+            (
+                statusFilter === 'all' ||
+                row.closingStatus.toLowerCase() === statusFilter
+            )
     }), [dailyRows, search, startDate, endDate, statusFilter])
 
     const totals = useMemo(() => {
         const sum = key => filteredRows.reduce(
-            (total, row) => total + Number(row[key] || 0), 0
+            (total, row) => total + Number(row[key] || 0),
+            0
         )
 
         const currencyAllocations = allocations.filter(r =>
-            cashDays.some(d => d.id === r.cash_day_id && d.currency_code === currencyCode)
+            cashDays.some(d =>
+                d.id === r.cash_day_id &&
+                d.currency_code === currencyCode
+            )
         )
 
         const currencyWithdrawals = withdrawals.filter(r =>
@@ -362,29 +554,59 @@ export default function CashManagement() {
 
         const safeDeposits = currencyAllocations
             .filter(r => r.category === 'safe_deposit')
-            .reduce((total, r) => total + Number(r.amount || 0), 0)
+            .reduce(
+                (total, r) => total + Number(r.amount || 0),
+                0
+            )
 
         const safeWithdrawals = currencyWithdrawals.reduce(
-            (total, r) => total + Number(r.amount || 0), 0
+            (total, r) => total + Number(r.amount || 0),
+            0
         )
 
         return {
             cashSales: sum('cashSales'),
-            digitalSales: sum('mobileMoney') + sum('bankCard') + sum('otherSales'),
+            digitalSales: sum('mobileMoney') +
+                sum('bankCard') +
+                sum('otherSales'),
             purchases: sum('cashPurchases'),
             expenses: sum('cashExpenses'),
             expected: filteredRows[0]?.expectedClosing || 0,
             safeBalance: safeDeposits - safeWithdrawals,
-            open: filteredRows.filter(r => r.closingStatus === 'Open').length,
-            closed: filteredRows.filter(r => r.closingStatus === 'Closed').length,
-            reconciled: filteredRows.filter(r => r.closingStatus === 'Reconciled').length,
-            shortage: filteredRows.filter(r => r.closingStatus === 'Shortage').length,
-            surplus: filteredRows.filter(r => r.closingStatus === 'Surplus').length
+
+            open: filteredRows.filter(
+                r => r.closingStatus === 'Open'
+            ).length,
+
+            closed: filteredRows.filter(
+                r => r.closingStatus === 'Closed'
+            ).length,
+
+            reconciled: filteredRows.filter(
+                r => r.closingStatus === 'Reconciled'
+            ).length,
+
+            shortage: filteredRows.filter(
+                r => r.closingStatus === 'Shortage'
+            ).length,
+
+            surplus: filteredRows.filter(
+                r => r.closingStatus === 'Surplus'
+            ).length
         }
-    }, [filteredRows, allocations, withdrawals, cashDays, currencyCode])
+    }, [
+        filteredRows,
+        allocations,
+        withdrawals,
+        cashDays,
+        currencyCode
+    ])
 
     const updateCashForm = (field, value) => {
-        setCashForm(previous => ({ ...previous, [field]: value }))
+        setCashForm(previous => ({
+            ...previous,
+            [field]: value
+        }))
     }
 
     const openNewCashForm = () => {
@@ -407,13 +629,17 @@ export default function CashManagement() {
         }
 
         setEditingId(row.position.id)
+
         setCashForm({
             cash_date: row.date,
             opening_cash: String(row.openingCash),
             opening_purchase_reserve: String(row.openingPurchaseReserve),
-            counted_cash: row.countedCash == null ? '' : String(row.countedCash),
+            counted_cash: row.countedCash == null
+                ? ''
+                : String(row.countedCash),
             notes: row.position.notes || ''
         })
+
         setError('')
         setMessage('')
         setShowCashForm(true)
@@ -430,15 +656,21 @@ export default function CashManagement() {
         ]
 
         if (openingValues.some(v =>
-            v.trim() === '' || !Number.isFinite(Number(v)) || Number(v) < 0
+            v.trim() === '' ||
+            !Number.isFinite(Number(v)) ||
+            Number(v) < 0
         )) {
             setError('Opening balances must be valid non-negative amounts.')
             return
         }
 
-        if (cashForm.counted_cash.trim() !== '' &&
-            (!Number.isFinite(Number(cashForm.counted_cash)) ||
-                Number(cashForm.counted_cash) < 0)) {
+        if (
+            cashForm.counted_cash.trim() !== '' &&
+            (
+                !Number.isFinite(Number(cashForm.counted_cash)) ||
+                Number(cashForm.counted_cash) < 0
+            )
+        ) {
             setError('Counted cash must be a valid non-negative amount.')
             return
         }
@@ -450,7 +682,9 @@ export default function CashManagement() {
                 cash_date: cashForm.cash_date,
                 currency_code: currencyCode,
                 opening_cash: Number(cashForm.opening_cash),
-                opening_purchase_reserve: Number(cashForm.opening_purchase_reserve),
+                opening_purchase_reserve: Number(
+                    cashForm.opening_purchase_reserve
+                ),
                 counted_cash: cashForm.counted_cash.trim() === ''
                     ? null
                     : Number(cashForm.counted_cash),
@@ -458,7 +692,6 @@ export default function CashManagement() {
                 updated_at: new Date().toISOString()
             }
 
-            // Avoid relying on an unconfirmed unique constraint for upsert.
             const { data: existing, error: findError } = await supabase
                 .from('cash_management_days')
                 .select('id,closed_at')
@@ -469,13 +702,18 @@ export default function CashManagement() {
             if (findError) throw findError
 
             if (existing?.closed_at) {
-                throw new Error('This cash day is closed. Reopen it before editing.')
+                throw new Error(
+                    'This cash day is closed. Reopen it before editing.'
+                )
             }
 
             const result = existing
-                ? await supabase.from('cash_management_days')
-                    .update(payload).eq('id', existing.id)
-                : await supabase.from('cash_management_days')
+                ? await supabase
+                    .from('cash_management_days')
+                    .update(payload)
+                    .eq('id', existing.id)
+                : await supabase
+                    .from('cash_management_days')
                     .insert(payload)
 
             if (result.error) throw result.error
@@ -484,6 +722,7 @@ export default function CashManagement() {
             setEditingId(null)
             setCashForm(emptyCashForm())
             setMessage('Cash record saved successfully.')
+
             await loadData()
         } catch (err) {
             setError(err.message || 'Could not save cash record.')
@@ -492,6 +731,8 @@ export default function CashManagement() {
         }
     }
 
+    // Existing allocations are historical records and are never deleted.
+    // New entries allocate only the remaining unallocated counted cash.
     const openAllocationForm = row => {
         if (!row.position) {
             setError('Save the daily cash record before allocating cash.')
@@ -504,27 +745,57 @@ export default function CashManagement() {
         }
 
         if (row.position.closed_at) {
-            setError('This day is closed. Reopen it before changing allocations.')
+            setError('This day is closed. Reopen it before allocating cash.')
             return
         }
 
-        const existing = row.dayAllocations
-        const getAmount = category => existing
-            .filter(r => r.category === category)
-            .reduce((sum, r) => sum + Number(r.amount || 0), 0)
+        const remaining = Number(row.countedCash) -
+            Number(row.allocationTotal || 0)
+
+        if (remaining < -0.01) {
+            setError(
+                'Existing allocations exceed counted cash. Review the allocation history before adding more.'
+            )
+            return
+        }
+
+        if (remaining <= 0.01) {
+            setError('This cash day is already fully allocated.')
+            return
+        }
 
         setAllocationForm({
             cash_date: row.date,
-            bank_transfer: String(getAmount('bank_transfer')),
-            till_float: String(getAmount('till_float')),
-            purchase_reserve: String(getAmount('purchase_reserve')),
-            safe_deposit: String(getAmount('safe_deposit')),
-            notes: existing[0]?.notes || ''
+            bank_transfer: '0',
+            till_float: '0',
+            purchase_reserve: '0',
+            safe_deposit: '0',
+            notes: ''
         })
+
         setError('')
         setMessage('')
         setShowAllocationForm(true)
     }
+
+    const allocationPosition = cashDays.find(r =>
+        r.cash_date === allocationForm.cash_date &&
+        r.currency_code === currencyCode
+    )
+
+    const existingAllocationTotal = allocationPosition
+        ? allocations
+            .filter(r => r.cash_day_id === allocationPosition.id)
+            .reduce((sum, r) => sum + Number(r.amount || 0), 0)
+        : 0
+
+    const allocationRemaining = allocationPosition?.counted_cash == null
+        ? 0
+        : Math.max(
+            0,
+            Number(allocationPosition.counted_cash) -
+            existingAllocationTotal
+        )
 
     const saveAllocation = async event => {
         event.preventDefault()
@@ -551,7 +822,7 @@ export default function CashManagement() {
         }
 
         if (position.closed_at) {
-            setError('This cash day is closed. Reopen it before editing allocations.')
+            setError('This cash day is closed. Reopen it before allocating cash.')
             return
         }
 
@@ -560,44 +831,62 @@ export default function CashManagement() {
             return
         }
 
-        const allocatedTotal = values.reduce((sum, v) => sum + v, 0)
+        const previousTotal = allocations
+            .filter(r => r.cash_day_id === position.id)
+            .reduce((sum, r) => sum + Number(r.amount || 0), 0)
 
-        if (Math.abs(allocatedTotal - Number(position.counted_cash)) > 0.01) {
+        const remaining = Number(position.counted_cash) - previousTotal
+
+        if (remaining < -0.01) {
+            setError('Existing allocations exceed counted cash.')
+            return
+        }
+
+        if (remaining <= 0.01) {
+            setError('This cash day is already fully allocated.')
+            return
+        }
+
+        const newAllocationTotal = values.reduce(
+            (sum, v) => sum + v,
+            0
+        )
+
+        if (Math.abs(newAllocationTotal - remaining) > 0.01) {
             setError(
-                `Allocation total (${fmt(allocatedTotal)}) must equal counted cash (${fmt(position.counted_cash)}).`
+                `New allocation total (${fmt(newAllocationTotal)}) must equal the remaining unallocated cash (${fmt(remaining)}).`
             )
+            return
+        }
+
+        const records = allocationCategories
+            .map(item => ({
+                cash_day_id: position.id,
+                category: item.key,
+                amount: Number(allocationForm[item.key]),
+                notes: allocationForm.notes.trim() || null
+            }))
+            .filter(item => item.amount > 0)
+
+        if (!records.length) {
+            setError('Enter at least one allocation amount.')
             return
         }
 
         setSaving(true)
 
         try {
-            const { error: deleteError } = await supabase
+            // Append-only: do not delete or replace historical allocations.
+            // The database trigger automatically posts the journal entries.
+            const { error: insertError } = await supabase
                 .from('cash_allocations')
-                .delete()
-                .eq('cash_day_id', position.id)
+                .insert(records)
 
-            if (deleteError) throw deleteError
-
-            const records = allocationCategories
-                .map(item => ({
-                    cash_day_id: position.id,
-                    category: item.key,
-                    amount: Number(allocationForm[item.key]),
-                    notes: allocationForm.notes.trim() || null
-                }))
-                .filter(item => item.amount > 0)
-
-            if (records.length) {
-                const { error: insertError } = await supabase
-                    .from('cash_allocations')
-                    .insert(records)
-
-                if (insertError) throw insertError
-            }
+            if (insertError) throw insertError
 
             setShowAllocationForm(false)
-            setMessage('Closing cash allocation saved successfully.')
+            setMessage('Additional cash allocation recorded successfully.')
+
             await loadData()
         } catch (err) {
             setError(err.message || 'Could not save allocation.')
@@ -636,41 +925,56 @@ export default function CashManagement() {
         )
 
         if (!position) {
-            setError('Create the cash-day record for this date and currency first.')
+            setError(
+                'Create the cash-day record for this date and currency first.'
+            )
             return
         }
 
         if (position.closed_at) {
-            setError('This day is closed. Reopen it before recording a withdrawal.')
+            setError(
+                'This day is closed. Reopen it before recording a withdrawal.'
+            )
             return
         }
 
         const safeDeposits = allocations
-            .filter(r => r.category === 'safe_deposit' &&
+            .filter(r =>
+                r.category === 'safe_deposit' &&
                 cashDays.some(d =>
                     d.id === r.cash_day_id &&
                     d.currency_code === currencyCode &&
                     d.cash_date <= withdrawalForm.withdrawal_date
-                ))
-            .reduce((sum, r) => sum + Number(r.amount || 0), 0)
+                )
+            )
+            .reduce(
+                (sum, r) => sum + Number(r.amount || 0),
+                0
+            )
 
         const previousWithdrawals = withdrawals
             .filter(r =>
                 r.cash_management_days?.currency_code === currencyCode &&
                 r.cash_management_days?.cash_date <= withdrawalForm.withdrawal_date
             )
-            .reduce((sum, r) => sum + Number(r.amount || 0), 0)
+            .reduce(
+                (sum, r) => sum + Number(r.amount || 0),
+                0
+            )
 
         const available = safeDeposits - previousWithdrawals
 
         if (amount > available + 0.01) {
-            setError(`Insufficient safe balance. Available: ${fmt(Math.max(0, available))}.`)
+            setError(
+                `Insufficient safe balance. Available: ${fmt(Math.max(0, available))}.`
+            )
             return
         }
 
         setSaving(true)
 
         try {
+            // The database trigger automatically posts the safe withdrawal.
             const { error: saveError } = await supabase
                 .from('safe_withdrawals')
                 .insert({
@@ -684,6 +988,7 @@ export default function CashManagement() {
 
             setShowWithdrawalForm(false)
             setMessage('Safe withdrawal recorded successfully.')
+
             await loadData()
         } catch (err) {
             setError(err.message || 'Could not record withdrawal.')
@@ -728,9 +1033,11 @@ export default function CashManagement() {
 
             if (actionError) throw actionError
 
-            setMessage(action === 'close'
-                ? 'Cash day closed successfully.'
-                : 'Cash day reopened successfully.')
+            setMessage(
+                action === 'close'
+                    ? 'Cash day closed successfully.'
+                    : 'Cash day reopened successfully.'
+            )
 
             await loadData()
         } catch (err) {
@@ -748,7 +1055,8 @@ export default function CashManagement() {
     }
 
     const allocationTotal = allocationCategories.reduce(
-        (sum, item) => sum + Number(allocationForm[item.key] || 0), 0
+        (sum, item) => sum + Number(allocationForm[item.key] || 0),
+        0
     )
 
     const renderMessage = text => text && (
@@ -791,25 +1099,52 @@ export default function CashManagement() {
                     <h1 style={styles.title}>Cash Management</h1>
                     <div style={styles.subtitle}>
                         Daily cash reconciliation, allocations and safe management.
+                        Each currency is reconciled separately; no FX conversion is applied.
                     </div>
                 </div>
 
-                <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
-                    <button style={styles.secondary} onClick={loadData}>
-                        <RefreshCw size={15} /> Refresh
+                <div style={{
+                    display: 'flex',
+                    gap: 9,
+                    flexWrap: 'wrap'
+                }}>
+                    <button
+                        style={styles.secondary}
+                        onClick={loadData}
+                        disabled={loading}
+                    >
+                        <RefreshCw size={15} />
+                        {loading ? 'Refreshing...' : 'Refresh'}
                     </button>
-                    <button style={styles.secondary} onClick={openWithdrawalForm}>
-                        <ArrowDownToLine size={15} /> Safe Withdrawal
+
+                    <button
+                        style={styles.secondary}
+                        onClick={openWithdrawalForm}
+                    >
+                        <ArrowDownToLine size={15} />
+                        Safe Withdrawal
                     </button>
-                    <button style={styles.button} onClick={openNewCashForm}>
-                        <Plus size={16} /> Record Daily Cash
+
+                    <button
+                        style={styles.button}
+                        onClick={openNewCashForm}
+                    >
+                        <Plus size={16} />
+                        Record Daily Cash
                     </button>
                 </div>
             </div>
 
-            <div style={{ ...styles.filters, alignItems: 'center' }}>
-                <div style={{ ...styles.field, minWidth: 150 }}>
+            <div style={{
+                ...styles.filters,
+                alignItems: 'center'
+            }}>
+                <div style={{
+                    ...styles.field,
+                    minWidth: 150
+                }}>
                     <label style={styles.label}>Currency</label>
+
                     <select
                         style={styles.input}
                         value={currencyCode}
@@ -817,15 +1152,20 @@ export default function CashManagement() {
                             setCurrencyCode(event.target.value)
                             setError('')
                             setMessage('')
+                            setReportRow(null)
                         }}
                     >
                         {CURRENCIES.map(currency => (
-                            <option key={currency} value={currency}>{currency}</option>
+                            <option key={currency} value={currency}>
+                                {currency}
+                            </option>
                         ))}
                     </select>
                 </div>
+
                 <div style={{ fontSize: 12, color: '#718096' }}>
-                    All figures below are shown in {currencyCode} only.
+                    Showing {currencyCode} records only. Amounts in different
+                    currencies are kept separate and are not converted.
                 </div>
             </div>
 
@@ -839,8 +1179,12 @@ export default function CashManagement() {
                 </div>
             )}
 
-            {error && !showCashForm && !showAllocationForm && !showWithdrawalForm &&
-                renderMessage(error)}
+            {error &&
+                !showCashForm &&
+                !showAllocationForm &&
+                !showWithdrawalForm &&
+                renderMessage(error)
+            }
 
             <div style={styles.cards}>
                 {[
@@ -852,8 +1196,12 @@ export default function CashManagement() {
                     [<LockKeyhole size={15} />, 'Safe Balance', totals.safeBalance]
                 ].map(([icon, label, value]) => (
                     <div style={styles.card} key={label}>
-                        <div style={styles.cardLabel}>{icon} {label}</div>
-                        <div style={styles.cardValue}>{fmt(value)}</div>
+                        <div style={styles.cardLabel}>
+                            {icon} {label}
+                        </div>
+                        <div style={styles.cardValue}>
+                            {fmt(value)}
+                        </div>
                     </div>
                 ))}
             </div>
@@ -868,20 +1216,36 @@ export default function CashManagement() {
                 ].map(([label, value, color]) => (
                     <div style={styles.card} key={label}>
                         <div style={styles.cardLabel}>{label}</div>
-                        <div style={{ ...styles.cardValue, color }}>{value}</div>
+                        <div style={{
+                            ...styles.cardValue,
+                            color
+                        }}>
+                            {value}
+                        </div>
                     </div>
                 ))}
             </div>
 
             <div style={styles.filters}>
-                <div style={{ ...styles.field, flex: '2 1 210px' }}>
+                <div style={{
+                    ...styles.field,
+                    flex: '2 1 210px'
+                }}>
                     <label style={styles.label}>Search records</label>
+
                     <div style={{ position: 'relative' }}>
                         <Search size={16} style={{
-                            position: 'absolute', left: 11, top: 11, color: '#8795a5'
+                            position: 'absolute',
+                            left: 11,
+                            top: 11,
+                            color: '#8795a5'
                         }} />
+
                         <input
-                            style={{ ...styles.input, paddingLeft: 35 }}
+                            style={{
+                                ...styles.input,
+                                paddingLeft: 35
+                            }}
                             placeholder="Search date or notes..."
                             value={search}
                             onChange={event => setSearch(event.target.value)}
@@ -889,22 +1253,43 @@ export default function CashManagement() {
                     </div>
                 </div>
 
-                <div style={{ ...styles.field, flex: '1 1 145px' }}>
+                <div style={{
+                    ...styles.field,
+                    flex: '1 1 145px'
+                }}>
                     <label style={styles.label}>From date</label>
-                    <input type="date" style={styles.input} value={startDate}
-                        onChange={event => setStartDate(event.target.value)} />
+                    <input
+                        type="date"
+                        style={styles.input}
+                        value={startDate}
+                        onChange={event => setStartDate(event.target.value)}
+                    />
                 </div>
 
-                <div style={{ ...styles.field, flex: '1 1 145px' }}>
+                <div style={{
+                    ...styles.field,
+                    flex: '1 1 145px'
+                }}>
                     <label style={styles.label}>To date</label>
-                    <input type="date" style={styles.input} value={endDate}
-                        onChange={event => setEndDate(event.target.value)} />
+                    <input
+                        type="date"
+                        style={styles.input}
+                        value={endDate}
+                        onChange={event => setEndDate(event.target.value)}
+                    />
                 </div>
 
-                <div style={{ ...styles.field, flex: '1 1 160px' }}>
+                <div style={{
+                    ...styles.field,
+                    flex: '1 1 160px'
+                }}>
                     <label style={styles.label}>Cash status</label>
-                    <select style={styles.input} value={statusFilter}
-                        onChange={event => setStatusFilter(event.target.value)}>
+
+                    <select
+                        style={styles.input}
+                        value={statusFilter}
+                        onChange={event => setStatusFilter(event.target.value)}
+                    >
                         <option value="all">All records</option>
                         <option value="open">Open</option>
                         <option value="reconciled">Reconciled</option>
@@ -914,12 +1299,20 @@ export default function CashManagement() {
                     </select>
                 </div>
 
-                <button style={styles.secondary} onClick={clearFilters}>
-                    <X size={14} /> Clear Filters
+                <button
+                    style={styles.secondary}
+                    onClick={clearFilters}
+                >
+                    <X size={14} />
+                    Clear Filters
                 </button>
             </div>
 
-            <div style={{ color: '#718096', fontSize: 12, marginBottom: 10 }}>
+            <div style={{
+                color: '#718096',
+                fontSize: 12,
+                marginBottom: 10
+            }}>
                 Showing {filteredRows.length} of {dailyRows.length} {currencyCode} daily records
             </div>
 
@@ -928,21 +1321,48 @@ export default function CashManagement() {
                     <thead>
                         <tr>
                             {[
-                                'Date', 'Opening Till Float', 'Purchase Reserve',
-                                'Cash Sales', 'Mobile Money', 'Bank/Card', 'Other Sales',
-                                'Cash Purchases', 'Cash Expenses', 'Expected Closing',
-                                'Counted Cash', 'Difference', 'Closing Status',
-                                'Allocation', 'Actions'
-                            ].map(label => <th style={styles.th} key={label}>{label}</th>)}
+                                'Date',
+                                'Opening Till Float',
+                                'Purchase Reserve',
+                                'Cash Sales',
+                                'Mobile Money',
+                                'Bank/Card',
+                                'Other Sales',
+                                'Cash Purchases',
+                                'Cash Expenses',
+                                'Expected Closing',
+                                'Counted Cash',
+                                'Difference',
+                                'Closing Status',
+                                'Allocation',
+                                'Actions'
+                            ].map(label => (
+                                <th style={styles.th} key={label}>
+                                    {label}
+                                </th>
+                            ))}
                         </tr>
                     </thead>
+
                     <tbody>
                         {loading ? (
-                            <tr><td style={styles.td} colSpan="15">Loading cash records...</td></tr>
+                            <tr>
+                                <td style={styles.td} colSpan="15">
+                                    Loading cash records...
+                                </td>
+                            </tr>
                         ) : filteredRows.length === 0 ? (
-                            <tr><td style={{ ...styles.td, textAlign: 'center' }} colSpan="15">
-                                No cash records found for {currencyCode}.
-                            </td></tr>
+                            <tr>
+                                <td
+                                    style={{
+                                        ...styles.td,
+                                        textAlign: 'center'
+                                    }}
+                                    colSpan="15"
+                                >
+                                    No cash records found for {currencyCode}.
+                                </td>
+                            </tr>
                         ) : filteredRows.map(row => (
                             <tr key={`${row.date}-${currencyCode}`}>
                                 <td style={styles.td}>{row.date}</td>
@@ -954,49 +1374,93 @@ export default function CashManagement() {
                                 <td style={styles.td}>{fmt(row.otherSales)}</td>
                                 <td style={styles.td}>{fmt(row.cashPurchases)}</td>
                                 <td style={styles.td}>{fmt(row.cashExpenses)}</td>
-                                <td style={{ ...styles.td, fontWeight: 800 }}>
+
+                                <td style={{
+                                    ...styles.td,
+                                    fontWeight: 800
+                                }}>
                                     {fmt(row.expectedClosing)}
                                 </td>
+
                                 <td style={styles.td}>
-                                    {row.countedCash === null ? 'Not counted' : fmt(row.countedCash)}
+                                    {row.countedCash === null
+                                        ? 'Not counted'
+                                        : fmt(row.countedCash)}
                                 </td>
+
                                 <td style={{
                                     ...styles.td,
                                     fontWeight: 700,
-                                    color: row.difference === null ? '#718096'
-                                        : row.difference < -0.01 ? '#b42318'
-                                            : row.difference > 0.01 ? '#176b45' : '#536579'
+                                    color: row.difference === null
+                                        ? '#718096'
+                                        : row.difference < -0.01
+                                            ? '#b42318'
+                                            : row.difference > 0.01
+                                                ? '#176b45'
+                                                : '#536579'
                                 }}>
-                                    {row.difference === null ? '—' : fmt(row.difference)}
+                                    {row.difference === null
+                                        ? '—'
+                                        : fmt(row.difference)}
                                 </td>
+
                                 <td style={styles.td}>{row.closingStatus}</td>
                                 <td style={styles.td}>{row.allocationStatus}</td>
+
                                 <td style={styles.td}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                        <button type="button" style={styles.secondary}
-                                            onClick={() => setReportRow(row)}>
-                                            <FileText size={14} /> Report
+                                    <div style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: 6
+                                    }}>
+                                        <button
+                                            type="button"
+                                            style={styles.secondary}
+                                            onClick={() => setReportRow(row)}
+                                        >
+                                            <FileText size={14} />
+                                            Report
                                         </button>
 
                                         {row.position?.closed_at ? (
-                                            <button type="button" style={styles.secondary}
+                                            <button
+                                                type="button"
+                                                style={styles.secondary}
                                                 disabled={saving}
-                                                onClick={() => handleClosingAction(row, 'reopen')}>
+                                                onClick={() =>
+                                                    handleClosingAction(row, 'reopen')
+                                                }
+                                            >
                                                 Reopen Day
                                             </button>
                                         ) : (
                                             <>
-                                                <button type="button" style={styles.secondary}
-                                                    onClick={() => openEditForm(row)}>
-                                                    <Pencil size={14} /> Edit
+                                                <button
+                                                    type="button"
+                                                    style={styles.secondary}
+                                                    onClick={() => openEditForm(row)}
+                                                >
+                                                    <Pencil size={14} />
+                                                    Edit
                                                 </button>
-                                                <button type="button" style={styles.secondary}
-                                                    onClick={() => openAllocationForm(row)}>
-                                                    <Landmark size={14} /> Allocate
+
+                                                <button
+                                                    type="button"
+                                                    style={styles.secondary}
+                                                    onClick={() => openAllocationForm(row)}
+                                                >
+                                                    <Landmark size={14} />
+                                                    Allocate
                                                 </button>
-                                                <button type="button" style={styles.button}
+
+                                                <button
+                                                    type="button"
+                                                    style={styles.button}
                                                     disabled={saving}
-                                                    onClick={() => handleClosingAction(row, 'close')}>
+                                                    onClick={() =>
+                                                        handleClosingAction(row, 'close')
+                                                    }
+                                                >
                                                     Close Day
                                                 </button>
                                             </>
@@ -1013,8 +1477,12 @@ export default function CashManagement() {
                 <h2 style={{ fontSize: 18, marginBottom: 12 }}>
                     Safe Withdrawal History ({currencyCode})
                 </h2>
+
                 <div style={styles.tableWrap}>
-                    <table style={{ ...styles.table, minWidth: 750 }}>
+                    <table style={{
+                        ...styles.table,
+                        minWidth: 750
+                    }}>
                         <thead>
                             <tr>
                                 <th style={styles.th}>Date</th>
@@ -1023,18 +1491,23 @@ export default function CashManagement() {
                                 <th style={styles.th}>Notes</th>
                             </tr>
                         </thead>
+
                         <tbody>
                             {withdrawals.filter(r =>
                                 r.cash_management_days?.currency_code === currencyCode
                             ).length === 0 ? (
-                                <tr><td style={styles.td} colSpan="4">
-                                    No safe withdrawals recorded.
-                                </td></tr>
+                                <tr>
+                                    <td style={styles.td} colSpan="4">
+                                        No safe withdrawals recorded.
+                                    </td>
+                                </tr>
                             ) : withdrawals.filter(r =>
                                 r.cash_management_days?.currency_code === currencyCode
                             ).map(row => (
                                 <tr key={row.id}>
-                                    <td style={styles.td}>{row.cash_management_days?.cash_date}</td>
+                                    <td style={styles.td}>
+                                        {row.cash_management_days?.cash_date}
+                                    </td>
                                     <td style={styles.td}>{fmt(row.amount)}</td>
                                     <td style={styles.td}>{row.purpose}</td>
                                     <td style={styles.td}>{row.notes || '—'}</td>
@@ -1049,8 +1522,12 @@ export default function CashManagement() {
                 <h2 style={{ fontSize: 18, marginBottom: 12 }}>
                     Closing Cash Allocation History ({currencyCode})
                 </h2>
+
                 <div style={styles.tableWrap}>
-                    <table style={{ ...styles.table, minWidth: 850 }}>
+                    <table style={{
+                        ...styles.table,
+                        minWidth: 850
+                    }}>
                         <thead>
                             <tr>
                                 <th style={styles.th}>Date</th>
@@ -1059,24 +1536,39 @@ export default function CashManagement() {
                                 <th style={styles.th}>Notes</th>
                             </tr>
                         </thead>
+
                         <tbody>
                             {allocations.filter(r =>
                                 cashDays.some(d =>
-                                    d.id === r.cash_day_id && d.currency_code === currencyCode
+                                    d.id === r.cash_day_id &&
+                                    d.currency_code === currencyCode
                                 )
                             ).length === 0 ? (
-                                <tr><td style={styles.td} colSpan="4">No allocations recorded.</td></tr>
+                                <tr>
+                                    <td style={styles.td} colSpan="4">
+                                        No allocations recorded.
+                                    </td>
+                                </tr>
                             ) : allocations.filter(r =>
                                 cashDays.some(d =>
-                                    d.id === r.cash_day_id && d.currency_code === currencyCode
+                                    d.id === r.cash_day_id &&
+                                    d.currency_code === currencyCode
                                 )
                             ).map(row => {
-                                const day = cashDays.find(d => d.id === row.cash_day_id)
-                                const category = allocationCategories.find(c => c.key === row.category)
+                                const day = cashDays.find(
+                                    d => d.id === row.cash_day_id
+                                )
+
+                                const category = allocationCategories.find(
+                                    c => c.key === row.category
+                                )
+
                                 return (
                                     <tr key={row.id}>
                                         <td style={styles.td}>{day?.cash_date}</td>
-                                        <td style={styles.td}>{category?.label || row.category}</td>
+                                        <td style={styles.td}>
+                                            {category?.label || row.category}
+                                        </td>
                                         <td style={styles.td}>{fmt(row.amount)}</td>
                                         <td style={styles.td}>{row.notes || '—'}</td>
                                     </tr>
@@ -1091,19 +1583,32 @@ export default function CashManagement() {
                 <div style={styles.modal}>
                     <div style={styles.modalBox}>
                         <div style={{
-                            display: 'flex', justifyContent: 'space-between',
-                            alignItems: 'center', marginBottom: 18
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: 18
                         }}>
                             <div>
                                 <h2 style={{ margin: 0, fontSize: 20 }}>
-                                    {editingId ? 'Edit Daily Cash Record' : 'Record Daily Cash'}
+                                    {editingId
+                                        ? 'Edit Daily Cash Record'
+                                        : 'Record Daily Cash'}
                                 </h2>
-                                <p style={{ margin: '5px 0 0', color: '#718096', fontSize: 12 }}>
+
+                                <p style={{
+                                    margin: '5px 0 0',
+                                    color: '#718096',
+                                    fontSize: 12
+                                }}>
                                     Currency: {currencyCode}. Sales, purchases and expenses are automatic.
                                 </p>
                             </div>
-                            <button type="button" style={styles.secondary}
-                                onClick={() => setShowCashForm(false)}>
+
+                            <button
+                                type="button"
+                                style={styles.secondary}
+                                onClick={() => setShowCashForm(false)}
+                            >
                                 <X size={17} />
                             </button>
                         </div>
@@ -1114,62 +1619,146 @@ export default function CashManagement() {
                             <div style={styles.formGrid}>
                                 <div style={styles.field}>
                                     <label style={styles.label}>Business date *</label>
-                                    <input type="date" required style={styles.input}
+                                    <input
+                                        type="date"
+                                        required
+                                        style={styles.input}
                                         value={cashForm.cash_date}
-                                        onChange={e => updateCashForm('cash_date', e.target.value)}
-                                        disabled={Boolean(editingId)} />
+                                        onChange={e =>
+                                            updateCashForm('cash_date', e.target.value)
+                                        }
+                                        disabled={Boolean(editingId)}
+                                    />
                                 </div>
 
                                 <div style={styles.field}>
-                                    <label style={styles.label}>Opening till float ({currencyCode}) *</label>
-                                    <input type="number" min="0" step="0.01" required
-                                        style={styles.input} value={cashForm.opening_cash}
-                                        onChange={e => updateCashForm('opening_cash', e.target.value)} />
+                                    <label style={styles.label}>
+                                        Opening till float ({currencyCode}) *
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        required
+                                        style={styles.input}
+                                        value={cashForm.opening_cash}
+                                        onChange={e =>
+                                            updateCashForm('opening_cash', e.target.value)
+                                        }
+                                        disabled={Boolean(editingId)}
+                                    />
                                 </div>
 
                                 <div style={styles.field}>
-                                    <label style={styles.label}>Opening purchase reserve ({currencyCode}) *</label>
-                                    <input type="number" min="0" step="0.01" required
-                                        style={styles.input} value={cashForm.opening_purchase_reserve}
-                                        onChange={e => updateCashForm('opening_purchase_reserve', e.target.value)} />
+                                    <label style={styles.label}>
+                                        Opening purchase reserve ({currencyCode}) *
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        required
+                                        style={styles.input}
+                                        value={cashForm.opening_purchase_reserve}
+                                        onChange={e =>
+                                            updateCashForm(
+                                                'opening_purchase_reserve',
+                                                e.target.value
+                                            )
+                                        }
+                                        disabled={Boolean(editingId)}
+                                    />
                                 </div>
 
                                 <div style={styles.field}>
-                                    <label style={styles.label}>Actual counted closing cash ({currencyCode})</label>
-                                    <input type="number" min="0" step="0.01"
-                                        style={styles.input} placeholder="Leave blank if not counted"
+                                    <label style={styles.label}>
+                                        Actual counted closing cash ({currencyCode})
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        style={styles.input}
+                                        placeholder="Leave blank if not counted"
                                         value={cashForm.counted_cash}
-                                        onChange={e => updateCashForm('counted_cash', e.target.value)} />
+                                        onChange={e =>
+                                            updateCashForm('counted_cash', e.target.value)
+                                        }
+                                    />
                                 </div>
 
-                                <div style={{ ...styles.field, gridColumn: '1 / -1' }}>
+                                <div style={{
+                                    ...styles.field,
+                                    gridColumn: '1 / -1'
+                                }}>
                                     <label style={styles.label}>Notes</label>
-                                    <textarea style={{ ...styles.input, minHeight: 75, resize: 'vertical' }}
+                                    <textarea
+                                        style={{
+                                            ...styles.input,
+                                            minHeight: 75,
+                                            resize: 'vertical'
+                                        }}
                                         value={cashForm.notes}
-                                        onChange={e => updateCashForm('notes', e.target.value)} />
+                                        onChange={e =>
+                                            updateCashForm('notes', e.target.value)
+                                        }
+                                    />
                                 </div>
                             </div>
 
-                            <div style={{ background: '#f1f7f3', padding: 14, borderRadius: 9, marginTop: 17 }}>
+                            {editingId && (
+                                <div style={{
+                                    background: '#fff8e6',
+                                    color: '#805b10',
+                                    padding: 12,
+                                    borderRadius: 8,
+                                    marginTop: 14,
+                                    fontSize: 12
+                                }}>
+                                    Opening balances and the business date are locked
+                                    after the cash-day record is created. Only the
+                                    counted cash and notes can be updated.
+                                </div>
+                            )}
+
+                            <div style={{
+                                background: '#f1f7f3',
+                                padding: 14,
+                                borderRadius: 9,
+                                marginTop: 17
+                            }}>
                                 <strong>Cash calculation</strong>
                                 <p style={{ fontSize: 13, marginBottom: 5 }}>
                                     Expected closing = Opening till float + Opening purchase reserve
-                                    + Cash sales − Cash purchases − Cash expenses.
+                                    + Cash sales − Received cash purchases − Cash expenses.
                                 </p>
                                 <div style={{ fontSize: 11, color: '#718096' }}>
-                                    POS sales and operational records are used automatically.
+                                    POS sales and received operational records are used automatically.
                                     Digital payments are excluded from physical cash.
                                 </div>
                             </div>
 
                             <div style={{
-                                display: 'flex', justifyContent: 'flex-end',
-                                gap: 9, marginTop: 20
+                                display: 'flex',
+                                justifyContent: 'flex-end',
+                                gap: 9,
+                                marginTop: 20
                             }}>
-                                <button type="button" style={styles.secondary}
-                                    onClick={() => setShowCashForm(false)}>Cancel</button>
-                                <button type="submit" style={styles.button} disabled={saving}>
-                                    <Save size={15} /> {saving ? 'Saving...' : 'Save Cash Record'}
+                                <button
+                                    type="button"
+                                    style={styles.secondary}
+                                    onClick={() => setShowCashForm(false)}
+                                >
+                                    Cancel
+                                </button>
+
+                                <button
+                                    type="submit"
+                                    style={styles.button}
+                                    disabled={saving}
+                                >
+                                    <Save size={15} />
+                                    {saving ? 'Saving...' : 'Save Cash Record'}
                                 </button>
                             </div>
                         </form>
@@ -1181,17 +1770,29 @@ export default function CashManagement() {
                 <div style={styles.modal}>
                     <div style={styles.modalBox}>
                         <div style={{
-                            display: 'flex', justifyContent: 'space-between',
-                            alignItems: 'center', marginBottom: 18
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: 18
                         }}>
                             <div>
-                                <h2 style={{ margin: 0, fontSize: 20 }}>Allocate Closing Cash</h2>
-                                <p style={{ margin: '5px 0 0', color: '#718096', fontSize: 12 }}>
+                                <h2 style={{ margin: 0, fontSize: 20 }}>
+                                    Allocate Remaining Closing Cash
+                                </h2>
+                                <p style={{
+                                    margin: '5px 0 0',
+                                    color: '#718096',
+                                    fontSize: 12
+                                }}>
                                     Currency: {currencyCode}
                                 </p>
                             </div>
-                            <button type="button" style={styles.secondary}
-                                onClick={() => setShowAllocationForm(false)}>
+
+                            <button
+                                type="button"
+                                style={styles.secondary}
+                                onClick={() => setShowAllocationForm(false)}
+                            >
                                 <X size={17} />
                             </button>
                         </div>
@@ -1202,47 +1803,113 @@ export default function CashManagement() {
                             <div style={styles.formGrid}>
                                 <div style={styles.field}>
                                     <label style={styles.label}>Allocation date</label>
-                                    <input type="date" style={styles.input}
-                                        value={allocationForm.cash_date} disabled />
+                                    <input
+                                        type="date"
+                                        style={styles.input}
+                                        value={allocationForm.cash_date}
+                                        disabled
+                                    />
                                 </div>
 
                                 {allocationCategories.map(item => (
                                     <div style={styles.field} key={item.key}>
-                                        <label style={styles.label}>{item.label} ({currencyCode})</label>
-                                        <input type="number" min="0" step="0.01" required
+                                        <label style={styles.label}>
+                                            {item.label} ({currencyCode})
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            required
                                             style={styles.input}
                                             value={allocationForm[item.key]}
-                                            onChange={e => setAllocationForm(prev => ({
-                                                ...prev, [item.key]: e.target.value
-                                            }))} />
+                                            onChange={e =>
+                                                setAllocationForm(prev => ({
+                                                    ...prev,
+                                                    [item.key]: e.target.value
+                                                }))
+                                            }
+                                        />
                                     </div>
                                 ))}
 
-                                <div style={{ ...styles.field, gridColumn: '1 / -1' }}>
+                                <div style={{
+                                    ...styles.field,
+                                    gridColumn: '1 / -1'
+                                }}>
                                     <label style={styles.label}>Notes</label>
-                                    <textarea style={{ ...styles.input, minHeight: 70 }}
+                                    <textarea
+                                        style={{
+                                            ...styles.input,
+                                            minHeight: 70
+                                        }}
                                         value={allocationForm.notes}
-                                        onChange={e => setAllocationForm(prev => ({
-                                            ...prev, notes: e.target.value
-                                        }))} />
-                                </div>
-                            </div>
-
-                            <div style={{ background: '#f1f7f3', padding: 14, borderRadius: 9, marginTop: 17 }}>
-                                <strong>Allocation total: {fmt(allocationTotal)}</strong>
-                                <div style={{ fontSize: 12, color: '#718096', marginTop: 5 }}>
-                                    All four categories must equal the actual counted closing cash.
+                                        onChange={e =>
+                                            setAllocationForm(prev => ({
+                                                ...prev,
+                                                notes: e.target.value
+                                            }))
+                                        }
+                                    />
                                 </div>
                             </div>
 
                             <div style={{
-                                display: 'flex', justifyContent: 'flex-end',
-                                gap: 9, marginTop: 20
+                                background: '#f1f7f3',
+                                padding: 14,
+                                borderRadius: 9,
+                                marginTop: 17
                             }}>
-                                <button type="button" style={styles.secondary}
-                                    onClick={() => setShowAllocationForm(false)}>Cancel</button>
-                                <button type="submit" style={styles.button} disabled={saving}>
-                                    <Save size={15} /> {saving ? 'Saving...' : 'Save Allocation'}
+                                <div style={{ fontSize: 13 }}>
+                                    Previously allocated: <strong>
+                                        {fmt(existingAllocationTotal)}
+                                    </strong>
+                                </div>
+
+                                <div style={{ fontSize: 13, marginTop: 5 }}>
+                                    Remaining to allocate: <strong>
+                                        {fmt(allocationRemaining)}
+                                    </strong>
+                                </div>
+
+                                <div style={{ fontSize: 13, marginTop: 5 }}>
+                                    New allocation total: <strong>
+                                        {fmt(allocationTotal)}
+                                    </strong>
+                                </div>
+
+                                <div style={{
+                                    fontSize: 12,
+                                    color: '#718096',
+                                    marginTop: 7
+                                }}>
+                                    New allocations must equal the remaining unallocated
+                                    counted cash. Previous allocations are preserved and
+                                    are never deleted or replaced.
+                                </div>
+                            </div>
+
+                            <div style={{
+                                display: 'flex',
+                                justifyContent: 'flex-end',
+                                gap: 9,
+                                marginTop: 20
+                            }}>
+                                <button
+                                    type="button"
+                                    style={styles.secondary}
+                                    onClick={() => setShowAllocationForm(false)}
+                                >
+                                    Cancel
+                                </button>
+
+                                <button
+                                    type="submit"
+                                    style={styles.button}
+                                    disabled={saving || allocationRemaining <= 0.01}
+                                >
+                                    <Save size={15} />
+                                    {saving ? 'Saving...' : 'Record Allocation'}
                                 </button>
                             </div>
                         </form>
@@ -1254,17 +1921,29 @@ export default function CashManagement() {
                 <div style={styles.modal}>
                     <div style={styles.modalBox}>
                         <div style={{
-                            display: 'flex', justifyContent: 'space-between',
-                            alignItems: 'center', marginBottom: 18
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: 18
                         }}>
                             <div>
-                                <h2 style={{ margin: 0, fontSize: 20 }}>Record Safe Withdrawal</h2>
-                                <p style={{ margin: '5px 0 0', color: '#718096', fontSize: 12 }}>
+                                <h2 style={{ margin: 0, fontSize: 20 }}>
+                                    Record Safe Withdrawal
+                                </h2>
+                                <p style={{
+                                    margin: '5px 0 0',
+                                    color: '#718096',
+                                    fontSize: 12
+                                }}>
                                     Currency: {currencyCode}
                                 </p>
                             </div>
-                            <button type="button" style={styles.secondary}
-                                onClick={() => setShowWithdrawalForm(false)}>
+
+                            <button
+                                type="button"
+                                style={styles.secondary}
+                                onClick={() => setShowWithdrawalForm(false)}
+                            >
                                 <X size={17} />
                             </button>
                         </div>
@@ -1274,50 +1953,104 @@ export default function CashManagement() {
                         <form onSubmit={saveWithdrawal}>
                             <div style={styles.formGrid}>
                                 <div style={styles.field}>
-                                    <label style={styles.label}>Withdrawal date *</label>
-                                    <input type="date" required style={styles.input}
+                                    <label style={styles.label}>
+                                        Withdrawal date *
+                                    </label>
+                                    <input
+                                        type="date"
+                                        required
+                                        style={styles.input}
                                         value={withdrawalForm.withdrawal_date}
-                                        onChange={e => setWithdrawalForm(prev => ({
-                                            ...prev, withdrawal_date: e.target.value
-                                        }))} />
+                                        onChange={e =>
+                                            setWithdrawalForm(prev => ({
+                                                ...prev,
+                                                withdrawal_date: e.target.value
+                                            }))
+                                        }
+                                    />
                                 </div>
 
                                 <div style={styles.field}>
-                                    <label style={styles.label}>Amount ({currencyCode}) *</label>
-                                    <input type="number" min="0.01" step="0.01" required
-                                        style={styles.input} value={withdrawalForm.amount}
-                                        onChange={e => setWithdrawalForm(prev => ({
-                                            ...prev, amount: e.target.value
-                                        }))} />
+                                    <label style={styles.label}>
+                                        Amount ({currencyCode}) *
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min="0.01"
+                                        step="0.01"
+                                        required
+                                        style={styles.input}
+                                        value={withdrawalForm.amount}
+                                        onChange={e =>
+                                            setWithdrawalForm(prev => ({
+                                                ...prev,
+                                                amount: e.target.value
+                                            }))
+                                        }
+                                    />
                                 </div>
 
-                                <div style={{ ...styles.field, gridColumn: '1 / -1' }}>
+                                <div style={{
+                                    ...styles.field,
+                                    gridColumn: '1 / -1'
+                                }}>
                                     <label style={styles.label}>Purpose *</label>
-                                    <input type="text" required style={styles.input}
+                                    <input
+                                        type="text"
+                                        required
+                                        style={styles.input}
                                         value={withdrawalForm.purpose}
-                                        onChange={e => setWithdrawalForm(prev => ({
-                                            ...prev, purpose: e.target.value
-                                        }))} />
+                                        onChange={e =>
+                                            setWithdrawalForm(prev => ({
+                                                ...prev,
+                                                purpose: e.target.value
+                                            }))
+                                        }
+                                    />
                                 </div>
 
-                                <div style={{ ...styles.field, gridColumn: '1 / -1' }}>
+                                <div style={{
+                                    ...styles.field,
+                                    gridColumn: '1 / -1'
+                                }}>
                                     <label style={styles.label}>Additional notes</label>
-                                    <textarea style={{ ...styles.input, minHeight: 70 }}
+                                    <textarea
+                                        style={{
+                                            ...styles.input,
+                                            minHeight: 70
+                                        }}
                                         value={withdrawalForm.notes}
-                                        onChange={e => setWithdrawalForm(prev => ({
-                                            ...prev, notes: e.target.value
-                                        }))} />
+                                        onChange={e =>
+                                            setWithdrawalForm(prev => ({
+                                                ...prev,
+                                                notes: e.target.value
+                                            }))
+                                        }
+                                    />
                                 </div>
                             </div>
 
                             <div style={{
-                                display: 'flex', justifyContent: 'flex-end',
-                                gap: 9, marginTop: 20
+                                display: 'flex',
+                                justifyContent: 'flex-end',
+                                gap: 9,
+                                marginTop: 20
                             }}>
-                                <button type="button" style={styles.secondary}
-                                    onClick={() => setShowWithdrawalForm(false)}>Cancel</button>
-                                <button type="submit" style={styles.button} disabled={saving}>
-                                    <Save size={15} /> {saving ? 'Saving...' : 'Save Withdrawal'}
+                                <button
+                                    type="button"
+                                    style={styles.secondary}
+                                    onClick={() => setShowWithdrawalForm(false)}
+                                >
+                                    Cancel
+                                </button>
+
+                                <button
+                                    type="submit"
+                                    style={styles.button}
+                                    disabled={saving}
+                                >
+                                    <Save size={15} />
+                                    {saving ? 'Saving...' : 'Save Withdrawal'}
                                 </button>
                             </div>
                         </form>
@@ -1327,39 +2060,75 @@ export default function CashManagement() {
 
             {reportRow && (
                 <div style={styles.modal}>
-                    <div className="cash-report-print"
-                        style={{ ...styles.modalBox, maxWidth: 800 }}>
-                        <div className="cash-report-no-print" style={{
-                            display: 'flex', justifyContent: 'flex-end',
-                            gap: 9, marginBottom: 18
-                        }}>
-                            <button type="button" style={styles.button}
-                                onClick={() => window.print()}>
-                                <Printer size={15} /> Print / Save PDF
+                    <div
+                        className="cash-report-print"
+                        style={{
+                            ...styles.modalBox,
+                            maxWidth: 800
+                        }}
+                    >
+                        <div
+                            className="cash-report-no-print"
+                            style={{
+                                display: 'flex',
+                                justifyContent: 'flex-end',
+                                gap: 9,
+                                marginBottom: 18
+                            }}
+                        >
+                            <button
+                                type="button"
+                                style={styles.button}
+                                onClick={() => window.print()}
+                            >
+                                <Printer size={15} />
+                                Print / Save PDF
                             </button>
-                            <button type="button" style={styles.secondary}
-                                onClick={() => setReportRow(null)}>
-                                <X size={15} /> Close
+
+                            <button
+                                type="button"
+                                style={styles.secondary}
+                                onClick={() => setReportRow(null)}
+                            >
+                                <X size={15} />
+                                Close
                             </button>
                         </div>
 
                         <div style={{
                             borderBottom: '2px solid #176b45',
-                            paddingBottom: 16, marginBottom: 20
+                            paddingBottom: 16,
+                            marginBottom: 20
                         }}>
-                            <h1 style={{ margin: 0, fontSize: 27, color: '#176b45' }}>
+                            <h1 style={{
+                                margin: 0,
+                                fontSize: 27,
+                                color: '#176b45'
+                            }}>
                                 Mbare Chitekete
                             </h1>
-                            <h2 style={{ margin: '8px 0 4px', fontSize: 20 }}>
+
+                            <h2 style={{
+                                margin: '8px 0 4px',
+                                fontSize: 20
+                            }}>
                                 Daily Cash Closing Report
                             </h2>
-                            <div style={{ color: '#64748b', fontSize: 13 }}>
+
+                            <div style={{
+                                color: '#64748b',
+                                fontSize: 13
+                            }}>
                                 Business date: {reportRow.date} | Currency: {currencyCode}
                             </div>
                         </div>
 
                         <h3>1. Daily Sales</h3>
-                        <table style={{ ...styles.table, minWidth: 0 }}>
+
+                        <table style={{
+                            ...styles.table,
+                            minWidth: 0
+                        }}>
                             <tbody>
                                 {[
                                     ['Cash sales', reportRow.cashSales],
@@ -1370,7 +2139,11 @@ export default function CashManagement() {
                                 ].map(([label, amount]) => (
                                     <tr key={label}>
                                         <td style={styles.td}>{label}</td>
-                                        <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700 }}>
+                                        <td style={{
+                                            ...styles.td,
+                                            textAlign: 'right',
+                                            fontWeight: 700
+                                        }}>
                                             {fmt(amount)}
                                         </td>
                                     </tr>
@@ -1378,8 +2151,14 @@ export default function CashManagement() {
                             </tbody>
                         </table>
 
-                        <h3 style={{ marginTop: 22 }}>2. Physical Cash Reconciliation</h3>
-                        <table style={{ ...styles.table, minWidth: 0 }}>
+                        <h3 style={{ marginTop: 22 }}>
+                            2. Physical Cash Reconciliation
+                        </h3>
+
+                        <table style={{
+                            ...styles.table,
+                            minWidth: 0
+                        }}>
                             <tbody>
                                 {[
                                     ['Opening till float', reportRow.openingCash],
@@ -1393,16 +2172,28 @@ export default function CashManagement() {
                                 ].map(([label, amount]) => (
                                     <tr key={label}>
                                         <td style={styles.td}>{label}</td>
-                                        <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700 }}>
-                                            {amount === null ? 'Not counted' : fmt(amount)}
+                                        <td style={{
+                                            ...styles.td,
+                                            textAlign: 'right',
+                                            fontWeight: 700
+                                        }}>
+                                            {amount === null
+                                                ? 'Not counted'
+                                                : fmt(amount)}
                                         </td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
 
-                        <h3 style={{ marginTop: 22 }}>3. Closing Cash Allocation</h3>
-                        <table style={{ ...styles.table, minWidth: 0 }}>
+                        <h3 style={{ marginTop: 22 }}>
+                            3. Closing Cash Allocation
+                        </h3>
+
+                        <table style={{
+                            ...styles.table,
+                            minWidth: 0
+                        }}>
                             <tbody>
                                 {[
                                     ['Bank transfer', reportRow.bankTransfer],
@@ -1413,7 +2204,11 @@ export default function CashManagement() {
                                 ].map(([label, amount]) => (
                                     <tr key={label}>
                                         <td style={styles.td}>{label}</td>
-                                        <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700 }}>
+                                        <td style={{
+                                            ...styles.td,
+                                            textAlign: 'right',
+                                            fontWeight: 700
+                                        }}>
                                             {fmt(amount)}
                                         </td>
                                     </tr>
@@ -1422,23 +2217,39 @@ export default function CashManagement() {
                         </table>
 
                         <h3 style={{ marginTop: 22 }}>4. Closing Status</h3>
-                        <p><strong>Closing status:</strong> {reportRow.closingStatus}</p>
-                        <p><strong>Allocation status:</strong> {reportRow.allocationStatus}</p>
+
+                        <p>
+                            <strong>Closing status:</strong> {reportRow.closingStatus}
+                        </p>
+
+                        <p>
+                            <strong>Allocation status:</strong> {reportRow.allocationStatus}
+                        </p>
+
                         <p>
                             <strong>Closed at:</strong>{' '}
                             {reportRow.position?.closed_at
-                                ? new Date(reportRow.position.closed_at).toLocaleString('en-GB')
+                                ? new Date(
+                                    reportRow.position.closed_at
+                                ).toLocaleString('en-GB')
                                 : 'Not formally closed'}
                         </p>
 
                         <h3 style={{ marginTop: 22 }}>5. Notes</h3>
-                        <p style={{ whiteSpace: 'pre-wrap', color: '#536579' }}>
+
+                        <p style={{
+                            whiteSpace: 'pre-wrap',
+                            color: '#536579'
+                        }}>
                             {reportRow.position?.notes || 'No notes recorded.'}
                         </p>
 
                         <div style={{
-                            borderTop: '1px solid #dce4ec', paddingTop: 14,
-                            marginTop: 25, fontSize: 11, color: '#718096',
+                            borderTop: '1px solid #dce4ec',
+                            paddingTop: 14,
+                            marginTop: 25,
+                            fontSize: 11,
+                            color: '#718096',
                             textAlign: 'center'
                         }}>
                             Mbare Chitekete — Daily Cash Closing Report

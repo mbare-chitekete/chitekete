@@ -11,18 +11,40 @@ const methods = [
   { value: 'bank_transfer', label: 'Bank Transfer' }
 ]
 
+const currencies = [
+  { value: 'USD', label: 'USD — US Dollar' },
+  { value: 'ZAR', label: 'ZAR — South African Rand' },
+  { value: 'ZWG', label: 'ZWG — Zimbabwe Gold' }
+]
+
 const CURRENCY_SYMBOLS = {
   USD: '$',
   ZAR: 'R',
   ZWG: 'ZiG'
 }
 
-const blank = () => ({
-  purchase_date: new Date().toLocaleDateString('en-CA'),
+function getHarareDate() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Harare',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date())
+
+  const values = Object.fromEntries(
+    parts.map(part => [part.type, part.value])
+  )
+
+  return `${values.year}-${values.month}-${values.day}`
+}
+
+const blank = (currencyCode = 'USD') => ({
+  purchase_date: getHarareDate(),
   menu_item_id: '',
   ordered_quantity: '',
   collected_quantity: '',
   unit_price: '',
+  currency_code: currencyCode,
   payment_method: 'cash',
   notes: ''
 })
@@ -70,15 +92,32 @@ function formatMoney(value, currencyCode = 'USD') {
 }
 
 export default function Purchases() {
-  const { currencyCode = 'USD', formatCurrency } = useCurrency()
+  const { currencyCode: contextCurrency = 'USD' } = useCurrency()
+
+  const [businessName, setBusinessName] = useState('Canteen')
+  const [settingsCurrency, setSettingsCurrency] = useState(
+    currencies.some(item => item.value === contextCurrency)
+      ? contextCurrency
+      : 'USD'
+  )
+
+  const [exchangeRates, setExchangeRates] = useState({
+    USD: 1,
+    ZAR: null,
+    ZWG: null
+  })
 
   const [purchases, setPurchases] = useState([])
   const [products, setProducts] = useState([])
+
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState(blank())
+  const [form, setForm] = useState(blank(contextCurrency))
+
+  const [settingsError, setSettingsError] = useState('')
+  const [settingsLoading, setSettingsLoading] = useState(true)
 
   const [search, setSearch] = useState('')
   const [paymentFilter, setPaymentFilter] = useState('all')
@@ -88,7 +127,98 @@ export default function Purchases() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
 
-  // Load purchases, menu items and the shared-stock mappings.
+  // ==========================================================
+  // LOAD BUSINESS SETTINGS AND CENTRAL EXCHANGE RATES
+  // Rates are configured centrally in Settings.
+  // No exchange rate is entered or supplied by staff.
+  // ==========================================================
+
+  const loadBusinessName = useCallback(async () => {
+    setSettingsLoading(true)
+    setSettingsError('')
+
+    try {
+      const { data, error } = await supabase
+        .from('canteen_settings')
+        .select(`
+          business_name,
+          currency_code,
+          fx_rate_to_usd,
+          exchange_rates_to_usd
+        `)
+        .eq('id', true)
+        .maybeSingle()
+
+      if (error) throw error
+
+      if (!data) {
+        throw new Error('Canteen Settings could not be found.')
+      }
+
+      const defaultCurrency = data.currency_code || 'USD'
+
+      if (!currencies.some(item => item.value === defaultCurrency)) {
+        throw new Error('The default Settings currency is invalid.')
+      }
+
+      const configuredRates = data.exchange_rates_to_usd || {}
+
+      if (
+        typeof configuredRates !== 'object' ||
+        Array.isArray(configuredRates)
+      ) {
+        throw new Error('The configured exchange rates are invalid.')
+      }
+
+      const readRate = currency => {
+        if (currency === 'USD') return 1
+
+        const value = configuredRates[currency]
+
+        if (value == null || value === '') return null
+
+        const rate = Number(value)
+
+        return Number.isFinite(rate) && rate > 0
+          ? rate
+          : null
+      }
+
+      setBusinessName(
+        data.business_name?.trim() || 'Canteen'
+      )
+
+      setSettingsCurrency(defaultCurrency)
+
+      setExchangeRates({
+        USD: 1,
+        ZAR: readRate('ZAR'),
+        ZWG: readRate('ZWG')
+      })
+
+      // The central rate configuration is authoritative.
+      // Do not silently use a frontend or manually entered rate.
+    } catch (err) {
+      console.error('Business settings loading failed:', err)
+
+      setSettingsError(
+        err.message || 'Unable to load exchange rates from Settings.'
+      )
+
+      setExchangeRates({
+        USD: 1,
+        ZAR: null,
+        ZWG: null
+      })
+    } finally {
+      setSettingsLoading(false)
+    }
+  }, [])
+
+  // ==========================================================
+  // LOAD PURCHASES, PRODUCTS AND SHARED STOCK MAPPINGS
+  // ==========================================================
+
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
@@ -114,6 +244,7 @@ export default function Purchases() {
             unit_price,
             total_purchase,
             currency_code,
+            fx_rate_to_usd,
             payment_method,
             notes,
             receipt_status,
@@ -137,11 +268,9 @@ export default function Purchases() {
         productResult.error ||
         mappingResult.error
 
-      if (loadError) {
-        throw loadError
-      }
+      if (loadError) throw loadError
 
-      // These are POS variants, not independently purchasable stock items.
+      // POS variants are not independently purchasable stock items.
       const mappedVariantIds = new Set(
         (mappingResult.data || []).map(
           mapping => mapping.sellable_menu_item_id
@@ -163,17 +292,24 @@ export default function Purchases() {
 
   useEffect(() => {
     load()
+    loadBusinessName()
 
-    const refresh = () => load()
+    const refresh = () => {
+      load()
+      loadBusinessName()
+    }
 
     window.addEventListener('refresh-canteen-dashboard', refresh)
 
     return () => {
       window.removeEventListener('refresh-canteen-dashboard', refresh)
     }
-  }, [load])
+  }, [load, loadBusinessName])
 
-  // Only products that are not mapped POS variants can be purchased here.
+  // ==========================================================
+  // FORM DATA
+  // ==========================================================
+
   const activeProducts = useMemo(
     () => products.filter(item => item.active),
     [products]
@@ -190,9 +326,31 @@ export default function Purchases() {
   const excessQty = Math.max(collectedQty - orderedQty, 0)
   const purchaseTotal = collectedQty * unitPrice
 
+  const selectedCurrency = form.currency_code || settingsCurrency
+
+  const selectedFxRate = Number(
+    exchangeRates[selectedCurrency]
+  )
+
+  const selectedRateAvailable =
+    !settingsLoading &&
+    !settingsError &&
+    currencies.some(item => item.value === selectedCurrency) &&
+    (
+      selectedCurrency === 'USD' ||
+      (
+        Number.isFinite(selectedFxRate) &&
+        selectedFxRate > 0
+      )
+    )
+
+  // ==========================================================
+  // OPEN AND CLOSE FORM
+  // ==========================================================
+
   function openAdd() {
     setForm({
-      ...blank(),
+      ...blank(settingsCurrency),
       menu_item_id: activeProducts[0]?.id || ''
     })
 
@@ -205,14 +363,44 @@ export default function Purchases() {
     if (saving) return
 
     setShowForm(false)
-    setForm(blank())
+    setForm(blank(settingsCurrency))
   }
+
+  function changePurchaseCurrency(nextCurrency) {
+    if (!currencies.some(item => item.value === nextCurrency)) {
+      return
+    }
+
+    setForm(current => ({
+      ...current,
+      currency_code: nextCurrency
+    }))
+  }
+
+  // ==========================================================
+  // SAVE PURCHASE USING V3 RPC
+  //
+  // The database retrieves the exchange rate from Settings.
+  // The frontend sends the selected currency, NOT the rate.
+  // ==========================================================
 
   async function save(e) {
     e.preventDefault()
 
     setError('')
     setMessage('')
+
+    if (settingsLoading) {
+      setError('Please wait while Settings and exchange rates load.')
+      return
+    }
+
+    if (settingsError) {
+      setError(
+        'Settings could not be loaded. Refresh Settings before recording a purchase.'
+      )
+      return
+    }
 
     if (!product || !product.active) {
       setError('Select an active stock product from the product catalogue.')
@@ -230,12 +418,37 @@ export default function Purchases() {
       !Number.isFinite(collectedQty) ||
       collectedQty <= 0
     ) {
-      setError('Ordered and collected quantities must both be greater than zero.')
+      setError(
+        'Ordered and collected quantities must both be greater than zero.'
+      )
       return
     }
 
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+    if (
+      !Number.isFinite(unitPrice) ||
+      unitPrice < 0
+    ) {
       setError('Enter a valid unit purchase cost.')
+      return
+    }
+
+    if (
+      !Number.isFinite(purchaseTotal) ||
+      purchaseTotal < 0
+    ) {
+      setError('The purchase total is invalid.')
+      return
+    }
+
+    if (!currencies.some(item => item.value === selectedCurrency)) {
+      setError('Select a supported purchase currency.')
+      return
+    }
+
+    if (!selectedRateAvailable) {
+      setError(
+        `The exchange rate for ${selectedCurrency} has not been configured in Settings. Ask the Owner or Manager to configure it before recording this purchase.`
+      )
       return
     }
 
@@ -249,7 +462,10 @@ export default function Purchases() {
       `Product: ${product.name}\n` +
       `Ordered: ${orderedQty} ${product.unit}\n` +
       `Collected: ${collectedQty} ${product.unit}\n` +
-      `Purchase total: ${formatMoney(purchaseTotal, currencyCode)}\n\n` +
+      `Unit cost: ${formatMoney(unitPrice, selectedCurrency)}\n` +
+      `Purchase total: ${formatMoney(purchaseTotal, selectedCurrency)}\n` +
+      `Currency: ${selectedCurrency}\n` +
+      `Exchange rate to USD: 1 ${selectedCurrency} = ${selectedFxRate} USD\n\n` +
       `No supplier will be recorded.\n\n` +
       `The collected quantity will immediately be added to this stock item.`
     )
@@ -260,7 +476,7 @@ export default function Purchases() {
 
     try {
       const { error: rpcError } = await supabase.rpc(
-        'create_received_purchase',
+        'create_received_purchase_v3',
         {
           p_purchase_date: form.purchase_date,
           p_menu_item_id: product.id,
@@ -269,16 +485,16 @@ export default function Purchases() {
           p_collected_quantity: collectedQty,
           p_unit_price: unitPrice,
           p_payment_method: form.payment_method,
-          p_notes: form.notes.trim() || null
+          p_currency_code: selectedCurrency,
+          p_notes: form.notes.trim() || null,
+          p_funding_source: 'business_cash'
         }
       )
 
-      if (rpcError) {
-        throw rpcError
-      }
+      if (rpcError) throw rpcError
 
       setShowForm(false)
-      setForm(blank())
+      setForm(blank(settingsCurrency))
 
       setMessage(
         excessQty > 0
@@ -292,11 +508,19 @@ export default function Purchases() {
         new Event('refresh-canteen-dashboard')
       )
     } catch (err) {
-      setError(err.message || 'An unexpected error occurred.')
+      console.error('Purchase recording failed:', err)
+
+      setError(
+        err.message || 'An unexpected error occurred while recording the purchase.'
+      )
     } finally {
       setSaving(false)
     }
   }
+
+  // ==========================================================
+  // FILTER PURCHASE RECORDS
+  // ==========================================================
 
   const filtered = useMemo(() => {
     return purchases.filter(item => {
@@ -310,15 +534,27 @@ export default function Purchases() {
 
       return (
         (!query || searchableText.includes(query)) &&
-        (paymentFilter === 'all' ||
-          item.payment_method === paymentFilter) &&
+        (
+          paymentFilter === 'all' ||
+          item.payment_method === paymentFilter
+        ) &&
         (!startDate || item.purchase_date >= startDate) &&
         (!endDate || item.purchase_date <= endDate)
       )
     })
-  }, [purchases, search, paymentFilter, startDate, endDate])
+  }, [
+    purchases,
+    search,
+    paymentFilter,
+    startDate,
+    endDate
+  ])
 
-  // Group totals by currency.
+  // ==========================================================
+  // TOTALS GROUPED BY CURRENCY
+  // Different currencies are never added together.
+  // ==========================================================
+
   const totalsByCurrency = useMemo(() => {
     return filtered.reduce((totals, item) => {
       const code = item.currency_code || 'USD'
@@ -336,24 +572,33 @@ export default function Purchases() {
 
   const purchaseValue = Object.entries(totalsByCurrency)
     .map(([code, amount]) => formatMoney(amount, code))
-    .join(' + ') || formatMoney(0, currencyCode)
+    .join(' + ') || formatMoney(0, settingsCurrency)
 
   function paymentName(value) {
     return methods.find(item => item.value === value)?.label || value
   }
 
+  // ==========================================================
+  // RENDER
+  // ==========================================================
+
   return (
-    <div className="purchases-mobile" style={{
-      display: 'grid',
-      gap: 12,
-      color: '#162b42',
-      minWidth: 0,
-      width: '100%'
-    }}>
+    <div
+      className="purchases-mobile"
+      style={{
+        display: 'grid',
+        gap: 12,
+        color: '#162b42',
+        minWidth: 0,
+        width: '100%'
+      }}
+    >
+
+      {/* HEADER */}
 
       <div className="welcome-row">
         <div>
-          <div className="eyebrow">PRODUCT BUYING</div>
+          <div className="eyebrow">{businessName}</div>
           <h1>Purchases</h1>
           <p>
             Record products collected from wholesalers or shops.
@@ -366,7 +611,12 @@ export default function Purchases() {
           type="button"
           style={primary}
           onClick={openAdd}
-          disabled={loading || activeProducts.length === 0}
+          disabled={
+            loading ||
+            settingsLoading ||
+            Boolean(settingsError) ||
+            activeProducts.length === 0
+          }
           title={
             activeProducts.length === 0
               ? 'Add an active stock product first'
@@ -375,19 +625,36 @@ export default function Purchases() {
         >
           <Plus
             size={16}
-            style={{ verticalAlign: 'middle', marginRight: 6 }}
+            style={{
+              verticalAlign: 'middle',
+              marginRight: 6
+            }}
           />
           Record purchase
         </button>
       </div>
 
+      {/* ALERTS */}
+
       {error && (
-        <div className="alert alert-error">{error}</div>
+        <div className="alert alert-error">
+          {error}
+        </div>
+      )}
+
+      {settingsError && (
+        <div className="alert alert-error">
+          Settings could not be loaded: {settingsError}
+        </div>
       )}
 
       {message && (
-        <div className="alert alert-success">{message}</div>
+        <div className="alert alert-success">
+          {message}
+        </div>
       )}
+
+      {/* PURCHASE FORM */}
 
       {showForm && (
         <section
@@ -411,10 +678,18 @@ export default function Purchases() {
             }}
           >
             <div>
-              <h2 style={{ margin: '0 0 4px', fontSize: 17 }}>
+              <h2 style={{
+                margin: '0 0 4px',
+                fontSize: 17
+              }}>
                 Record product purchase
               </h2>
-              <p style={{ margin: 0, color: '#718096', fontSize: 12 }}>
+
+              <p style={{
+                margin: 0,
+                color: '#718096',
+                fontSize: 12
+              }}>
                 Enter the quantities physically collected.
               </p>
             </div>
@@ -437,10 +712,17 @@ export default function Purchases() {
 
           <form
             onSubmit={save}
-            style={{ display: 'grid', gap: 10 }}
+            style={{
+              display: 'grid',
+              gap: 10
+            }}
           >
+
+            {/* PURCHASE DATE */}
+
             <label>
               Purchase date
+
               <input
                 style={field}
                 type="date"
@@ -453,8 +735,11 @@ export default function Purchases() {
               />
             </label>
 
+            {/* PRODUCT */}
+
             <label>
               Product
+
               <select
                 style={field}
                 required
@@ -465,13 +750,19 @@ export default function Purchases() {
                 })}
               >
                 <option value="">Select product</option>
+
                 {activeProducts.map(item => (
-                  <option key={item.id} value={item.id}>
+                  <option
+                    key={item.id}
+                    value={item.id}
+                  >
                     {item.name} ({item.unit})
                   </option>
                 ))}
               </select>
             </label>
+
+            {/* QUANTITIES */}
 
             <div
               style={{
@@ -482,6 +773,7 @@ export default function Purchases() {
             >
               <label>
                 Quantity ordered
+
                 <input
                   style={field}
                   type="number"
@@ -499,6 +791,7 @@ export default function Purchases() {
 
               <label>
                 Quantity collected
+
                 <input
                   style={field}
                   type="number"
@@ -515,14 +808,15 @@ export default function Purchases() {
               </label>
             </div>
 
+            {/* QUANTITY DIFFERENCE */}
+
             {orderedQty > 0 && collectedQty > 0 && (
               <div
                 style={{
                   padding: 10,
                   borderRadius: 9,
                   background: excessQty > 0 ? '#fff7e8' : '#f0f7f3',
-                  border: `1px solid ${excessQty > 0 ? '#f1d49d' : '#d4e9dc'
-                    }`,
+                  border: `1px solid ${excessQty > 0 ? '#f1d49d' : '#d4e9dc'}`,
                   fontSize: 12
                 }}
               >
@@ -531,6 +825,7 @@ export default function Purchases() {
                     <strong style={{ color: '#9a5b00' }}>
                       Extra quantity: {excessQty} {product?.unit || ''}
                     </strong>
+
                     <p style={{ margin: '4px 0 0' }}>
                       All {collectedQty} collected units will enter stock.
                       The excess will be flagged for review.
@@ -539,19 +834,47 @@ export default function Purchases() {
                 ) : collectedQty < orderedQty ? (
                   <>
                     <strong>Short collection</strong>
+
                     <p style={{ margin: '4px 0 0' }}>
                       {orderedQty - collectedQty} {product?.unit || ''} fewer
                       units were collected. Only the actual quantity enters stock.
                     </p>
                   </>
                 ) : (
-                  <strong>Ordered and collected quantities match.</strong>
+                  <strong>
+                    Ordered and collected quantities match.
+                  </strong>
                 )}
               </div>
             )}
 
+            {/* PURCHASE CURRENCY */}
+
             <label>
-              Unit purchase cost ({currencyCode})
+              Purchase currency
+
+              <select
+                style={field}
+                required
+                value={selectedCurrency}
+                onChange={e => changePurchaseCurrency(e.target.value)}
+              >
+                {currencies.map(currency => (
+                  <option
+                    key={currency.value}
+                    value={currency.value}
+                  >
+                    {currency.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {/* UNIT PRICE */}
+
+            <label>
+              Unit purchase cost ({selectedCurrency})
+
               <input
                 style={field}
                 type="number"
@@ -567,8 +890,58 @@ export default function Purchases() {
               />
             </label>
 
+            {/* CENTRAL EXCHANGE RATE */}
+
+            <div
+              style={{
+                padding: 11,
+                borderRadius: 9,
+                background: '#f0f7f3',
+                border: '1px solid #d4e9dc',
+                fontSize: 12
+              }}
+            >
+              <strong>Exchange rate from Settings</strong>
+
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  marginTop: 7
+                }}
+              >
+                <span>
+                  1 {selectedCurrency} =
+                </span>
+
+                <strong>
+                  {settingsLoading
+                    ? 'Loading...'
+                    : selectedRateAvailable
+                      ? `${selectedFxRate} USD`
+                      : 'Rate not configured'
+                  }
+                </strong>
+              </div>
+
+              <small
+                style={{
+                  display: 'block',
+                  marginTop: 6,
+                  color: '#718096'
+                }}
+              >
+                Exchange rates are managed centrally in Settings.
+                Staff cannot change them when recording purchases.
+              </small>
+            </div>
+
+            {/* PAYMENT METHOD */}
+
             <label>
               Payment method
+
               <select
                 style={field}
                 value={form.payment_method}
@@ -578,17 +951,26 @@ export default function Purchases() {
                 })}
               >
                 {methods.map(method => (
-                  <option key={method.value} value={method.value}>
+                  <option
+                    key={method.value}
+                    value={method.value}
+                  >
                     {method.label}
                   </option>
                 ))}
               </select>
             </label>
 
+            {/* NOTES */}
+
             <label>
               Notes
+
               <textarea
-                style={{ ...field, resize: 'vertical' }}
+                style={{
+                  ...field,
+                  resize: 'vertical'
+                }}
                 rows="2"
                 value={form.notes}
                 onChange={e => setForm({
@@ -599,6 +981,8 @@ export default function Purchases() {
               />
             </label>
 
+            {/* PURCHASE SUMMARY */}
+
             <div
               style={{
                 padding: 11,
@@ -607,64 +991,116 @@ export default function Purchases() {
                 fontSize: 12
               }}
             >
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                gap: 8
-              }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 8
+                }}
+              >
                 <span>Collected quantity</span>
-                <strong>{collectedQty} {product?.unit || ''}</strong>
-              </div>
 
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                gap: 8,
-                marginTop: 6
-              }}>
-                <span>Unit cost</span>
-                <strong>{formatCurrency(unitPrice)}</strong>
-              </div>
-
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                gap: 8,
-                marginTop: 9,
-                paddingTop: 8,
-                borderTop: '1px solid #dce8e0'
-              }}>
-                <strong>Purchase total</strong>
-                <strong style={{ fontSize: 17 }}>
-                  {formatCurrency(purchaseTotal)}
+                <strong>
+                  {collectedQty} {product?.unit || ''}
                 </strong>
               </div>
 
-              <small style={{
-                display: 'block',
-                marginTop: 5,
-                color: '#718096'
-              }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  marginTop: 6
+                }}
+              >
+                <span>Unit cost</span>
+
+                <strong>
+                  {formatMoney(unitPrice, selectedCurrency)}
+                </strong>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  marginTop: 9,
+                  paddingTop: 8,
+                  borderTop: '1px solid #dce8e0'
+                }}
+              >
+                <strong>Purchase total</strong>
+
+                <strong style={{ fontSize: 17 }}>
+                  {formatMoney(purchaseTotal, selectedCurrency)}
+                </strong>
+              </div>
+
+              {selectedRateAvailable && (
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    marginTop: 7
+                  }}
+                >
+                  <span>USD inventory cost equivalent</span>
+
+                  <strong>
+                    {formatMoney(
+                      purchaseTotal * selectedFxRate,
+                      'USD'
+                    )}
+                  </strong>
+                </div>
+              )}
+
+              <small
+                style={{
+                  display: 'block',
+                  marginTop: 7,
+                  color: '#718096'
+                }}
+              >
                 Actual collected quantity × unit purchase cost.
+                Inventory valuation is maintained in USD.
               </small>
             </div>
 
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 8
-            }}>
+            {/* ACTION BUTTONS */}
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: 8
+              }}
+            >
               <button
                 type="submit"
-                style={{ ...primary, minHeight: 42 }}
-                disabled={saving || !product}
+                style={{
+                  ...primary,
+                  minHeight: 42
+                }}
+                disabled={
+                  saving ||
+                  !product ||
+                  settingsLoading ||
+                  Boolean(settingsError) ||
+                  !selectedRateAvailable
+                }
               >
                 {saving ? 'Recording...' : 'Save purchase'}
               </button>
 
               <button
                 type="button"
-                style={{ ...secondary, minHeight: 42 }}
+                style={{
+                  ...secondary,
+                  minHeight: 42
+                }}
                 onClick={closeForm}
                 disabled={saving}
               >
@@ -672,14 +1108,21 @@ export default function Purchases() {
               </button>
             </div>
 
-            <small style={{ color: '#718096', fontSize: 11 }}>
+            <small
+              style={{
+                color: '#718096',
+                fontSize: 11
+              }}
+            >
               Once recorded, the collected quantity is added to stock.
               Purchase records cannot be edited from this screen.
             </small>
+
           </form>
         </section>
       )}
 
+      {/* SUMMARY CARDS */}
 
       <div className="stats-grid">
         <div className="stat-card">
@@ -690,10 +1133,16 @@ export default function Purchases() {
 
         <div className="stat-card">
           <span>Purchase value</span>
-          <strong style={{ fontSize: 20 }}>{purchaseValue}</strong>
+
+          <strong style={{ fontSize: 20 }}>
+            {purchaseValue}
+          </strong>
+
           <small>Grouped by purchase currency</small>
         </div>
       </div>
+
+      {/* PURCHASE HISTORY */}
 
       <section style={panel}>
         <div
@@ -704,7 +1153,12 @@ export default function Purchases() {
             marginBottom: 16
           }}
         >
-          <div style={{ flex: '1 1 200px', position: 'relative' }}>
+          <div
+            style={{
+              flex: '1 1 200px',
+              position: 'relative'
+            }}
+          >
             <Search
               size={16}
               style={{
@@ -716,7 +1170,10 @@ export default function Purchases() {
             />
 
             <input
-              style={{ ...field, paddingLeft: 35 }}
+              style={{
+                ...field,
+                paddingLeft: 35
+              }}
               placeholder="Search product or notes..."
               value={search}
               onChange={e => setSearch(e.target.value)}
@@ -724,13 +1181,20 @@ export default function Purchases() {
           </div>
 
           <select
-            style={{ ...field, width: 160 }}
+            style={{
+              ...field,
+              width: 160
+            }}
             value={paymentFilter}
             onChange={e => setPaymentFilter(e.target.value)}
           >
             <option value="all">All payments</option>
+
             {methods.map(method => (
-              <option key={method.value} value={method.value}>
+              <option
+                key={method.value}
+                value={method.value}
+              >
                 {method.label}
               </option>
             ))}
@@ -738,7 +1202,10 @@ export default function Purchases() {
 
           <input
             aria-label="From date"
-            style={{ ...field, width: 150 }}
+            style={{
+              ...field,
+              width: 150
+            }}
             type="date"
             value={startDate}
             onChange={e => setStartDate(e.target.value)}
@@ -746,7 +1213,10 @@ export default function Purchases() {
 
           <input
             aria-label="To date"
-            style={{ ...field, width: 150 }}
+            style={{
+              ...field,
+              width: 150
+            }}
             type="date"
             value={endDate}
             onChange={e => setEndDate(e.target.value)}
@@ -782,7 +1252,9 @@ export default function Purchases() {
                   <th>Ordered</th>
                   <th>Collected</th>
                   <th>Excess</th>
+                  <th>Currency</th>
                   <th>Unit cost</th>
+                  <th>FX rate</th>
                   <th>Total</th>
                   <th>Payment</th>
                 </tr>
@@ -807,10 +1279,13 @@ export default function Purchases() {
 
                       <td>
                         <strong>{row.item_name}</strong>
-                        <div style={{
-                          fontSize: 12,
-                          color: '#718096'
-                        }}>
+
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: '#718096'
+                          }}
+                        >
                           {row.notes || ''}
                         </div>
                       </td>
@@ -827,10 +1302,12 @@ export default function Purchases() {
 
                       <td>
                         {excess > 0 ? (
-                          <span style={{
-                            color: '#a45b00',
-                            fontWeight: 700
-                          }}>
+                          <span
+                            style={{
+                              color: '#a45b00',
+                              fontWeight: 700
+                            }}
+                          >
                             +{excess} {row.unit}
                           </span>
                         ) : (
@@ -838,7 +1315,18 @@ export default function Purchases() {
                         )}
                       </td>
 
-                      <td>{formatMoney(row.unit_price, code)}</td>
+                      <td>{code}</td>
+
+                      <td>
+                        {formatMoney(row.unit_price, code)}
+                      </td>
+
+                      <td>
+                        {row.fx_rate_to_usd == null
+                          ? '—'
+                          : Number(row.fx_rate_to_usd).toString()
+                        }
+                      </td>
 
                       <td>
                         <strong>
@@ -846,7 +1334,9 @@ export default function Purchases() {
                         </strong>
                       </td>
 
-                      <td>{paymentName(row.payment_method)}</td>
+                      <td>
+                        {paymentName(row.payment_method)}
+                      </td>
                     </tr>
                   )
                 })}
@@ -854,7 +1344,7 @@ export default function Purchases() {
                 {!filtered.length && (
                   <tr>
                     <td
-                      colSpan="9"
+                      colSpan="11"
                       style={{
                         textAlign: 'center',
                         padding: 24
@@ -869,7 +1359,6 @@ export default function Purchases() {
           </div>
         )}
       </section>
-
     </div>
   )
 }

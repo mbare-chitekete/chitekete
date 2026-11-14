@@ -1,5 +1,4 @@
-
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
     Utensils,
     LockKeyhole,
@@ -17,6 +16,32 @@ export default function Login() {
     const [showPassword, setShowPassword] = useState(false)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState('')
+
+    // Business name from Settings
+    const [businessName, setBusinessName] = useState('Canteen')
+
+    // Load saved business name from Supabase
+    useEffect(() => {
+        async function loadBusinessName() {
+            try {
+                const { data, error } = await supabase
+                    .from('canteen_settings')
+                    .select('business_name')
+                    .eq('id', true)
+                    .maybeSingle()
+
+                if (error) throw error
+
+                if (data?.business_name?.trim()) {
+                    setBusinessName(data.business_name.trim())
+                }
+            } catch (err) {
+                console.error('Login business name loading failed:', err)
+            }
+        }
+
+        loadBusinessName()
+    }, [])
 
     async function handleLogin(e) {
         e.preventDefault()
@@ -97,7 +122,7 @@ export default function Login() {
                         fontWeight: 800,
                         margin: 0
                     }}>
-                        Mbare Chitekete
+                        {businessName}
                     </h1>
 
                     <p style={{
@@ -105,7 +130,7 @@ export default function Login() {
                         fontSize: 13,
                         marginTop: 6
                     }}>
-                        Canteen Management System
+                        {businessName} Management System
                     </p>
                 </div>
 
@@ -285,7 +310,7 @@ export default function Login() {
                     fontSize: 11,
                     marginTop: 22
                 }}>
-                    © {new Date().getFullYear()} Mbare Chitekete
+                    © {new Date().getFullYear()} {businessName}
                 </p>
             </div>
         </main>

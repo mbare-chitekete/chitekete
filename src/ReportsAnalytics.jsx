@@ -1,20 +1,71 @@
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
     Search,
     RefreshCw,
     Download,
-    TrendingUp,
     ShoppingCart,
+    X,
+    TrendingUp,
     Receipt,
     Banknote,
-    X
+    Package,
+    AlertCircle
 } from 'lucide-react'
 import { supabase } from './supabase'
 
-const today = () => {
-    const d = new Date()
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const BUSINESS_TIMEZONE = 'Africa/Harare'
+const PAGE_SIZE = 1000
+
+const getHarareToday = () => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: BUSINESS_TIMEZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).formatToParts(new Date())
+
+    const values = Object.fromEntries(
+        parts.map(part => [part.type, part.value])
+    )
+
+    return `${values.year}-${values.month}-${values.day}`
+}
+
+const addDays = (dateString, amount) => {
+    const [year, month, day] = dateString.split('-').map(Number)
+    const date = new Date(Date.UTC(year, month - 1, day))
+    date.setUTCDate(date.getUTCDate() + amount)
+
+    return date.toISOString().slice(0, 10)
+}
+
+const getPeriodRange = period => {
+    const end = getHarareToday()
+    const [year, month] = end.split('-').map(Number)
+
+    switch (period) {
+        case 'daily':
+            return { start: end, end }
+
+        case 'weekly':
+            return { start: addDays(end, -6), end }
+
+        case 'monthly':
+            return {
+                start: `${year}-${String(month).padStart(2, '0')}-01`,
+                end
+            }
+
+        case 'yearly':
+            return {
+                start: `${year}-01-01`,
+                end
+            }
+
+        default:
+            return { start: '', end: '' }
+    }
 }
 
 const formatAmount = (amount, currencyCode = 'USD') => {
@@ -33,12 +84,18 @@ const formatAmount = (amount, currencyCode = 'USD') => {
     }
 }
 
+const formatNumber = value =>
+    Number(value || 0).toLocaleString('en-US', {
+        maximumFractionDigits: 3
+    })
+
 const sumByCurrency = (rows, amountField) => {
     const totals = {}
 
     rows.forEach(row => {
         const code = row.currency_code || 'USD'
-        totals[code] = (totals[code] || 0) + Number(row[amountField] || 0)
+        totals[code] = (totals[code] || 0) +
+            Number(row[amountField] || 0)
     })
 
     return Object.entries(totals)
@@ -47,6 +104,36 @@ const sumByCurrency = (rows, amountField) => {
             currency_code,
             amount
         }))
+}
+
+// Fetch every page instead of silently stopping at Supabase's row limit.
+const fetchAllPages = async queryFactory => {
+    const allRows = []
+
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+        const { data, error } = await queryFactory()
+            .range(offset, offset + PAGE_SIZE - 1)
+
+        if (error) throw error
+
+        const rows = data || []
+        allRows.push(...rows)
+
+        if (rows.length < PAGE_SIZE) break
+    }
+
+    return allRows
+}
+
+const escapeCsv = value => {
+    let text = String(value ?? '')
+
+    // Prevent spreadsheet formula execution when opening exported CSV files.
+    if (/^[\s]*[=+\-@]/.test(text)) {
+        text = `'${text}`
+    }
+
+    return `"${text.replace(/"/g, '""')}"`
 }
 
 const styles = {
@@ -215,7 +302,12 @@ export default function ReportsAnalytics() {
     const [payments, setPayments] = useState([])
     const [categories, setCategories] = useState([])
 
+    const [ownerProfitLoss, setOwnerProfitLoss] = useState(null)
+    const [productProfitability, setProductProfitability] = useState([])
+    const [ownerReportError, setOwnerReportError] = useState('')
+
     const [loading, setLoading] = useState(true)
+    const [ownerReportLoading, setOwnerReportLoading] = useState(false)
     const [error, setError] = useState('')
 
     const [reportType, setReportType] = useState('sales')
@@ -225,136 +317,204 @@ export default function ReportsAnalytics() {
     const [search, setSearch] = useState('')
     const [categoryFilter, setCategoryFilter] = useState('all')
 
-    const loadData = async () => {
+    const activeRange = useMemo(
+        () => getPeriodRange(period),
+        [period]
+    )
+
+    const effectiveStart = startDate || activeRange.start
+    const effectiveEnd = endDate || activeRange.end
+
+    const matchesDate = useCallback(date => {
+        return (
+            (!effectiveStart || date >= effectiveStart) &&
+            (!effectiveEnd || date <= effectiveEnd)
+        )
+    }, [effectiveStart, effectiveEnd])
+
+    const loadData = useCallback(async () => {
         setLoading(true)
         setError('')
 
         try {
             const [
-                salesResult,
-                purchasesResult,
-                expensesResult,
-                paymentsResult,
+                salesRows,
+                purchaseRows,
+                expenseRows,
+                paymentRows,
                 categoriesResult
             ] = await Promise.all([
-                supabase.rpc('reports_get_sales_lines', {
-                    p_start_date: null,
-                    p_end_date: null
-                }),
+                fetchAllPages(() =>
+                    supabase.rpc('reports_get_sales_lines', {
+                        p_start_date: null,
+                        p_end_date: null
+                    })
+                ),
 
-                supabase
-                    .from('purchases')
-                    .select(`
-                        id,
-                        purchase_date,
-                        item_name,
-                        unit,
-                        ordered_quantity,
-                        quantity,
-                        excess_quantity,
-                        unit_price,
-                        total_purchase,
-                        payment_method,
-                        currency_code,
-                        notes
-                    `)
-                    .order('purchase_date', { ascending: false }),
+                fetchAllPages(() =>
+                    supabase
+                        .from('purchases')
+                        .select(`
+                            id,
+                            purchase_date,
+                            item_name,
+                            unit,
+                            ordered_quantity,
+                            quantity,
+                            excess_quantity,
+                            unit_price,
+                            total_purchase,
+                            payment_method,
+                            currency_code,
+                            notes
+                        `)
+                        .order('purchase_date', { ascending: false })
+                ),
 
-                supabase
-                    .from('expenses')
-                    .select(`
-                        id,
-                        expense_date,
-                        description,
-                        category,
-                        amount,
-                        currency_code,
-                        payment_method,
-                        notes
-                    `)
-                    .order('expense_date', { ascending: false }),
+                fetchAllPages(() =>
+                    supabase
+                        .from('expenses')
+                        .select(`
+                            id,
+                            expense_date,
+                            description,
+                            category,
+                            amount,
+                            currency_code,
+                            payment_method,
+                            notes
+                        `)
+                        .order('expense_date', { ascending: false })
+                ),
 
-                supabase.rpc('reports_get_payment_summary', {
-                    p_start_date: null,
-                    p_end_date: null
-                }),
+                fetchAllPages(() =>
+                    supabase.rpc('reports_get_payment_summary', {
+                        p_start_date: null,
+                        p_end_date: null
+                    })
+                ),
 
                 supabase
                     .from('menu_categories')
-                    .select('id,name')
+                    .select('id,name,active')
                     .order('name')
             ])
 
-            const failed = [
-                salesResult.error,
-                purchasesResult.error,
-                expensesResult.error,
-                paymentsResult.error,
-                categoriesResult.error
-            ].find(Boolean)
-
-            if (failed) {
-                throw failed
+            if (categoriesResult.error) {
+                throw categoriesResult.error
             }
 
-            setSales(salesResult.data || [])
-            setPurchases(purchasesResult.data || [])
-            setExpenses(expensesResult.data || [])
-            setPayments(paymentsResult.data || [])
+            setSales(salesRows)
+            setPurchases(purchaseRows)
+            setExpenses(expenseRows)
+            setPayments(paymentRows)
             setCategories(categoriesResult.data || [])
 
         } catch (err) {
             console.error('Reports loading error:', err)
-            setError(err.message || 'Unable to load report data. Please try again.')
+            setError(
+                err.message ||
+                'Unable to load report data. Please try again.'
+            )
         } finally {
             setLoading(false)
         }
-    }
+    }, [])
 
     useEffect(() => {
         loadData()
-    }, [])
+    }, [loadData])
 
-    const categoryName = categoryId =>
-        categories.find(category => category.id === categoryId)?.name || 'Uncategorised'
+    const categoryName = useCallback(categoryId => {
+        return categories.find(category => category.id === categoryId)?.name ||
+            'Uncategorised'
+    }, [categories])
 
-    const getDateRange = () => {
-        if (period === 'all') {
-            return { start: '', end: '' }
+    // Owner RPCs require both dates. For all-time reports, use the earliest
+    // available transaction date through the current Harare date.
+    const getOwnerReportRange = useCallback(() => {
+        const end = effectiveEnd || getHarareToday()
+
+        let start = effectiveStart
+
+        if (!start) {
+            const dates = [
+                ...sales.map(row => row.sale_date),
+                ...purchases.map(row => row.purchase_date),
+                ...expenses.map(row => row.expense_date)
+            ].filter(Boolean).sort()
+
+            start = dates[0] || end
         }
 
-        const now = new Date()
-        const end = today()
-        let start = new Date(now)
+        return { start, end }
+    }, [
+        effectiveStart,
+        effectiveEnd,
+        sales,
+        purchases,
+        expenses
+    ])
 
-        if (period === 'daily') {
-            start = new Date(now)
-        } else if (period === 'weekly') {
-            start.setDate(now.getDate() - 6)
-        } else if (period === 'monthly') {
-            start = new Date(now.getFullYear(), now.getMonth(), 1)
-        } else if (period === 'yearly') {
-            start = new Date(now.getFullYear(), 0, 1)
+    const loadOwnerReports = useCallback(async () => {
+        setOwnerReportLoading(true)
+        setOwnerReportError('')
+
+        try {
+            const { start, end } = getOwnerReportRange()
+
+            if (start > end) {
+                throw new Error('The report start date cannot be after the end date.')
+            }
+
+            const [profitResult, productResult] = await Promise.all([
+                supabase.rpc('owner_profit_loss_report', {
+                    p_start_date: start,
+                    p_end_date: end
+                }),
+
+                supabase.rpc('owner_product_profitability_report', {
+                    p_start_date: start,
+                    p_end_date: end
+                })
+            ])
+
+            if (profitResult.error) throw profitResult.error
+            if (productResult.error) throw productResult.error
+
+            setOwnerProfitLoss(profitResult.data || null)
+            setProductProfitability(productResult.data || [])
+
+        } catch (err) {
+            console.error('Owner reports error:', err)
+            setOwnerProfitLoss(null)
+            setProductProfitability([])
+            setOwnerReportError(
+                err.message ||
+                'Owner financial reports are unavailable for this account.'
+            )
+        } finally {
+            setOwnerReportLoading(false)
         }
+    }, [getOwnerReportRange])
 
-        const formattedStart =
-            `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
-
-        return {
-            start: formattedStart,
-            end
+    useEffect(() => {
+        if (
+            reportType === 'profit-loss' ||
+            reportType === 'product-profitability'
+        ) {
+            loadOwnerReports()
         }
-    }
-
-    const activeRange = getDateRange()
-    const effectiveStart = startDate || activeRange.start
-    const effectiveEnd = endDate || activeRange.end
-
-    const matchesDate = date =>
-        (!effectiveStart || date >= effectiveStart) &&
-        (!effectiveEnd || date <= effectiveEnd)
+    }, [
+        reportType,
+        effectiveStart,
+        effectiveEnd,
+        loadOwnerReports
+    ])
 
     const filteredSales = useMemo(() => {
+        const term = search.trim().toLowerCase()
+
         return sales.filter(row => {
             const category = categoryName(row.category_id)
 
@@ -366,7 +526,7 @@ export default function ReportsAnalytics() {
                 row.currency_code,
                 category
             ].some(value =>
-                String(value || '').toLowerCase().includes(search.toLowerCase())
+                String(value || '').toLowerCase().includes(term)
             )
 
             const matchesCategory =
@@ -381,14 +541,15 @@ export default function ReportsAnalytics() {
         })
     }, [
         sales,
-        categories,
-        effectiveStart,
-        effectiveEnd,
+        categoryName,
+        matchesDate,
         search,
         categoryFilter
     ])
 
     const filteredPurchases = useMemo(() => {
+        const term = search.trim().toLowerCase()
+
         return purchases.filter(row => {
             const matchesSearch = [
                 row.item_name,
@@ -397,14 +558,16 @@ export default function ReportsAnalytics() {
                 row.notes,
                 row.currency_code
             ].some(value =>
-                String(value || '').toLowerCase().includes(search.toLowerCase())
+                String(value || '').toLowerCase().includes(term)
             )
 
             return matchesDate(row.purchase_date) && matchesSearch
         })
-    }, [purchases, effectiveStart, effectiveEnd, search])
+    }, [purchases, matchesDate, search])
 
     const filteredExpenses = useMemo(() => {
+        const term = search.trim().toLowerCase()
+
         return expenses.filter(row => {
             const matchesSearch = [
                 row.description,
@@ -413,14 +576,16 @@ export default function ReportsAnalytics() {
                 row.notes,
                 row.currency_code
             ].some(value =>
-                String(value || '').toLowerCase().includes(search.toLowerCase())
+                String(value || '').toLowerCase().includes(term)
             )
 
             return matchesDate(row.expense_date) && matchesSearch
         })
-    }, [expenses, effectiveStart, effectiveEnd, search])
+    }, [expenses, matchesDate, search])
 
     const filteredPayments = useMemo(() => {
+        const term = search.trim().toLowerCase()
+
         return payments.filter(row => {
             const matchesSearch = [
                 row.sale_date,
@@ -429,12 +594,12 @@ export default function ReportsAnalytics() {
                 row.transaction_count,
                 row.total_amount
             ].some(value =>
-                String(value ?? '').toLowerCase().includes(search.toLowerCase())
+                String(value ?? '').toLowerCase().includes(term)
             )
 
             return matchesDate(row.sale_date) && matchesSearch
         })
-    }, [payments, effectiveStart, effectiveEnd, search])
+    }, [payments, matchesDate, search])
 
     const salesTotals = useMemo(() => ({
         revenue: sumByCurrency(filteredSales, 'sales_value'),
@@ -472,7 +637,9 @@ export default function ReportsAnalytics() {
                 }
             }
 
-            grouped[key].transaction_count += Number(row.transaction_count || 0)
+            grouped[key].transaction_count +=
+                Number(row.transaction_count || 0)
+
             grouped[key].amount += Number(row.total_amount || 0)
         })
 
@@ -481,48 +648,6 @@ export default function ReportsAnalytics() {
             a.method.localeCompare(b.method)
         )
     }, [filteredPayments])
-
-    const profitLossTotals = useMemo(() => {
-        const periodSales = sumByCurrency(
-            sales.filter(row => matchesDate(row.sale_date)),
-            'sales_value'
-        )
-
-        const periodPurchases = sumByCurrency(
-            purchases.filter(row => matchesDate(row.purchase_date)),
-            'total_purchase'
-        )
-
-        const periodExpenses = sumByCurrency(
-            expenses.filter(row => matchesDate(row.expense_date)),
-            'amount'
-        )
-
-        const currencies = new Set([
-            ...periodSales.map(row => row.currency_code),
-            ...periodPurchases.map(row => row.currency_code),
-            ...periodExpenses.map(row => row.currency_code)
-        ])
-
-        return [...currencies].sort().map(code => {
-            const salesAmount =
-                periodSales.find(row => row.currency_code === code)?.amount || 0
-
-            const purchaseAmount =
-                periodPurchases.find(row => row.currency_code === code)?.amount || 0
-
-            const expenseAmount =
-                periodExpenses.find(row => row.currency_code === code)?.amount || 0
-
-            return {
-                currency_code: code,
-                sales: salesAmount,
-                purchases: purchaseAmount,
-                expenses: expenseAmount,
-                result: salesAmount - purchaseAmount - expenseAmount
-            }
-        })
-    }, [sales, purchases, expenses, effectiveStart, effectiveEnd])
 
     const bestSellers = useMemo(() => {
         const grouped = {}
@@ -661,17 +786,48 @@ export default function ReportsAnalytics() {
             headers = [
                 'Currency',
                 'Sales Revenue',
-                'Purchases',
+                'Cost of Goods Sold',
+                'Gross Profit',
                 'Operating Expenses',
-                'Estimated Operating Result'
+                'Net Profit',
+                'Gross Profit Margin',
+                'Net Profit Margin',
+                'Missing Cost Lines',
+                'Unclassified Sales',
+                'Unclassified Expenses'
             ]
 
-            rows = profitLossTotals.map(row => [
-                row.currency_code,
-                row.sales,
-                row.purchases,
-                row.expenses,
-                row.result
+            rows = ownerProfitLoss ? [[
+                'USD',
+                ownerProfitLoss.sales_revenue,
+                ownerProfitLoss.cost_of_goods_sold,
+                ownerProfitLoss.gross_profit,
+                ownerProfitLoss.operating_expenses,
+                ownerProfitLoss.net_profit,
+                ownerProfitLoss.gross_profit_margin,
+                ownerProfitLoss.net_profit_margin,
+                ownerProfitLoss.missing_cost_lines,
+                ownerProfitLoss.unclassified_sales_count,
+                ownerProfitLoss.unclassified_expenses_count
+            ]] : []
+
+        } else if (reportType === 'product-profitability') {
+            headers = [
+                'Product',
+                'Quantity Sold',
+                'Revenue USD',
+                'Cost of Goods Sold USD',
+                'Gross Profit USD',
+                'Cost Status'
+            ]
+
+            rows = productProfitability.map(row => [
+                row.product_name,
+                row.quantity_sold,
+                row.revenue,
+                row.cost_of_goods_sold,
+                row.gross_profit,
+                row.cost_status
             ])
 
         } else {
@@ -692,15 +848,10 @@ export default function ReportsAnalytics() {
             ])
         }
 
-        const escapeCsv = value => {
-            const text = String(value ?? '')
-            return `"${text.replace(/"/g, '""')}"`
-        }
-
         const csv = [
             headers.map(escapeCsv).join(','),
             ...rows.map(row => row.map(escapeCsv).join(','))
-        ].join('\n')
+        ].join('\r\n')
 
         const blob = new Blob(['\uFEFF' + csv], {
             type: 'text/csv;charset=utf-8;'
@@ -710,13 +861,15 @@ export default function ReportsAnalytics() {
         const link = document.createElement('a')
 
         link.href = url
-        link.download = `canteen-${reportType}-report-${today()}.csv`
+        link.download =
+            `canteen-${reportType}-report-${getHarareToday()}.csv`
 
         document.body.appendChild(link)
         link.click()
         link.remove()
 
-        URL.revokeObjectURL(url)
+        // Revoke after the browser has had time to start the download.
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
     }
 
     const clearFilters = () => {
@@ -749,6 +902,15 @@ export default function ReportsAnalytics() {
         ))
     }
 
+    const reportTabs = [
+        ['sales', 'Sales'],
+        ['purchases', 'Purchases'],
+        ['expenses', 'Expenses'],
+        ['payments', 'Payments'],
+        ['profit-loss', 'Owner Profit & Loss'],
+        ['product-profitability', 'Product Profitability']
+    ]
+
     return (
         <div style={styles.page}>
             <div style={styles.header}>
@@ -756,14 +918,23 @@ export default function ReportsAnalytics() {
                     <h1 style={styles.title}>Reports & Analytics</h1>
                     <div style={styles.subtitle}>
                         Review sales performance, purchases, expenses and payment collections.
+                        Business reporting dates use Africa/Harare.
                     </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
                     <button
                         style={styles.secondary}
-                        onClick={loadData}
-                        disabled={loading}
+                        onClick={() => {
+                            loadData()
+                            if (
+                                reportType === 'profit-loss' ||
+                                reportType === 'product-profitability'
+                            ) {
+                                loadOwnerReports()
+                            }
+                        }}
+                        disabled={loading || ownerReportLoading}
                     >
                         <RefreshCw size={15} />
                         {loading ? 'Loading...' : 'Refresh'}
@@ -772,7 +943,7 @@ export default function ReportsAnalytics() {
                     <button
                         style={styles.button}
                         onClick={exportCsv}
-                        disabled={loading}
+                        disabled={loading || ownerReportLoading}
                     >
                         <Download size={15} /> Export CSV
                     </button>
@@ -815,7 +986,7 @@ export default function ReportsAnalytics() {
                         type="date"
                         style={styles.input}
                         value={startDate}
-                        max={endDate || undefined}
+                        max={effectiveEnd || undefined}
                         onChange={event => setStartDate(event.target.value)}
                     />
                 </div>
@@ -826,7 +997,7 @@ export default function ReportsAnalytics() {
                         type="date"
                         style={styles.input}
                         value={endDate}
-                        min={startDate || undefined}
+                        min={effectiveStart || undefined}
                         onChange={event => setEndDate(event.target.value)}
                     />
                 </div>
@@ -872,7 +1043,7 @@ export default function ReportsAnalytics() {
                         <ShoppingCart size={15} /> Quantity Sold
                     </div>
                     <div style={styles.cardValue}>
-                        {salesTotals.quantity.toLocaleString()}
+                        {formatNumber(salesTotals.quantity)}
                     </div>
                 </div>
 
@@ -894,7 +1065,7 @@ export default function ReportsAnalytics() {
                         key={`${row.method}_${row.currency_code}`}
                     >
                         <div style={styles.cardLabel}>
-                            {row.method.replace('_', ' ')} ({row.currency_code})
+                            {row.method.replace(/_/g, ' ')} ({row.currency_code})
                         </div>
 
                         <div style={styles.cardValue}>
@@ -906,7 +1077,7 @@ export default function ReportsAnalytics() {
                             fontSize: 12,
                             marginTop: 7
                         }}>
-                            {row.transaction_count} transactions
+                            {formatNumber(row.transaction_count)} transactions
                         </div>
                     </div>
                 ))}
@@ -920,13 +1091,7 @@ export default function ReportsAnalytics() {
                 flexWrap: 'wrap',
                 marginBottom: 15
             }}>
-                {[
-                    ['sales', 'Sales'],
-                    ['purchases', 'Purchases'],
-                    ['expenses', 'Expenses'],
-                    ['payments', 'Payments'],
-                    ['profit-loss', 'Estimated Profit & Loss']
-                ].map(([value, label]) => (
+                {reportTabs.map(([value, label]) => (
                     <button
                         key={value}
                         style={
@@ -942,61 +1107,179 @@ export default function ReportsAnalytics() {
             </div>
 
             {reportType === 'profit-loss' && (
-                <div style={{ ...styles.cards, marginTop: 10 }}>
-                    {profitLossTotals.length === 0 ? (
-                        <div style={styles.card}>
-                            No financial records found for this period.
+                <div style={{ marginTop: 10 }}>
+                    {ownerReportLoading ? (
+                        <div style={styles.card}>Loading Owner financial report...</div>
+                    ) : ownerReportError ? (
+                        <div style={{
+                            ...styles.message,
+                            background: '#fff7e6',
+                            color: '#8a5a00'
+                        }}>
+                            <AlertCircle size={15} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+                            {ownerReportError}
+                            <div style={{ marginTop: 6 }}>
+                                This report is restricted to the canteen Owner by the database.
+                                Your other reports remain available.
+                            </div>
                         </div>
-                    ) : profitLossTotals.map(row => (
-                        <div
-                            key={row.currency_code}
-                            style={{
-                                ...styles.card,
-                                gridColumn: '1 / -1'
-                            }}
-                        >
-                            <div style={styles.cardLabel}>
-                                Estimated Operating Result ({row.currency_code})
+                    ) : ownerProfitLoss ? (
+                        <>
+                            <div style={styles.cards}>
+                                {[
+                                    ['Sales Revenue', ownerProfitLoss.sales_revenue],
+                                    ['Cost of Goods Sold', ownerProfitLoss.cost_of_goods_sold],
+                                    ['Gross Profit', ownerProfitLoss.gross_profit],
+                                    ['Operating Expenses', ownerProfitLoss.operating_expenses],
+                                    ['Net Profit', ownerProfitLoss.net_profit]
+                                ].map(([label, amount]) => (
+                                    <div style={styles.card} key={label}>
+                                        <div style={styles.cardLabel}>{label} (USD)</div>
+                                        <div style={{
+                                            ...styles.cardValue,
+                                            color: label === 'Net Profit'
+                                                ? Number(amount) >= 0 ? '#176b45' : '#b42318'
+                                                : '#162b42'
+                                        }}>
+                                            {formatAmount(amount, 'USD')}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div style={styles.cards}>
+                                <div style={styles.card}>
+                                    <div style={styles.cardLabel}>Gross Profit Margin</div>
+                                    <div style={styles.cardValue}>
+                                        {formatNumber(ownerProfitLoss.gross_profit_margin)}%
+                                    </div>
+                                </div>
+
+                                <div style={styles.card}>
+                                    <div style={styles.cardLabel}>Net Profit Margin</div>
+                                    <div style={styles.cardValue}>
+                                        {formatNumber(ownerProfitLoss.net_profit_margin)}%
+                                    </div>
+                                </div>
+
+                                <div style={styles.card}>
+                                    <div style={styles.cardLabel}>Missing Cost Lines</div>
+                                    <div style={styles.cardValue}>
+                                        {formatNumber(ownerProfitLoss.missing_cost_lines)}
+                                    </div>
+                                </div>
+
+                                <div style={styles.card}>
+                                    <div style={styles.cardLabel}>Unclassified Sales</div>
+                                    <div style={styles.cardValue}>
+                                        {formatNumber(ownerProfitLoss.unclassified_sales_count)}
+                                    </div>
+                                </div>
+
+                                <div style={styles.card}>
+                                    <div style={styles.cardLabel}>Unclassified Expenses</div>
+                                    <div style={styles.cardValue}>
+                                        {formatNumber(ownerProfitLoss.unclassified_expenses_count)}
+                                    </div>
+                                </div>
                             </div>
 
                             <div style={{
-                                ...styles.cardValue,
-                                color: row.result >= 0 ? '#176b45' : '#b42318'
+                                ...styles.message,
+                                background: '#f3f6fa',
+                                color: '#536579'
                             }}>
-                                {formatAmount(row.result, row.currency_code)}
+                                <strong>Accounting basis:</strong> This report uses posted
+                                financial journal entries and recorded cost of goods sold.
+                                It is the database's USD-only Owner financial report, not a
+                                calculation based on purchase totals.
                             </div>
+                        </>
+                    ) : (
+                        <div style={styles.card}>No Owner profit-and-loss data returned.</div>
+                    )}
+                </div>
+            )}
 
-                            <div style={{
-                                display: 'grid',
-                                gridTemplateColumns: 'repeat(auto-fit,minmax(145px,1fr))',
-                                gap: 12,
-                                marginTop: 15,
-                                color: '#536579',
-                                fontSize: 13
-                            }}>
-                                <div>
-                                    Sales Revenue
-                                    <strong style={{ display: 'block', marginTop: 5 }}>
-                                        {formatAmount(row.sales, row.currency_code)}
-                                    </strong>
-                                </div>
-
-                                <div>
-                                    Purchases
-                                    <strong style={{ display: 'block', marginTop: 5 }}>
-                                        {formatAmount(row.purchases, row.currency_code)}
-                                    </strong>
-                                </div>
-
-                                <div>
-                                    Operating Expenses
-                                    <strong style={{ display: 'block', marginTop: 5 }}>
-                                        {formatAmount(row.expenses, row.currency_code)}
-                                    </strong>
-                                </div>
+            {reportType === 'product-profitability' && (
+                <div style={{ marginTop: 10 }}>
+                    {ownerReportLoading ? (
+                        <div style={styles.card}>Loading product profitability...</div>
+                    ) : ownerReportError ? (
+                        <div style={{
+                            ...styles.message,
+                            background: '#fff7e6',
+                            color: '#8a5a00'
+                        }}>
+                            <AlertCircle size={15} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+                            {ownerReportError}
+                            <div style={{ marginTop: 6 }}>
+                                Product profitability is restricted to the canteen Owner.
                             </div>
                         </div>
-                    ))}
+                    ) : (
+                        <>
+                            <div style={{
+                                ...styles.message,
+                                background: '#f3f6fa',
+                                color: '#536579'
+                            }}>
+                                <strong>USD only:</strong> Revenue and cost are calculated
+                                from sale-item cost snapshots. Products marked Incomplete
+                                have at least one sales line without a recorded cost.
+                            </div>
+
+                            <div style={styles.tableWrap}>
+                                <table style={styles.table}>
+                                    <thead>
+                                        <tr>
+                                            <th style={styles.th}>Product</th>
+                                            <th style={styles.th}>Quantity Sold</th>
+                                            <th style={styles.th}>Revenue</th>
+                                            <th style={styles.th}>Cost of Goods Sold</th>
+                                            <th style={styles.th}>Gross Profit</th>
+                                            <th style={styles.th}>Cost Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {productProfitability.length === 0 ? (
+                                            <tr>
+                                                <td style={styles.td} colSpan="6">
+                                                    No product profitability records found.
+                                                </td>
+                                            </tr>
+                                        ) : productProfitability.map((row, index) => (
+                                            <tr key={`${row.product_name}-${index}`}>
+                                                <td style={styles.td}>{row.product_name}</td>
+                                                <td style={styles.td}>
+                                                    {formatNumber(row.quantity_sold)}
+                                                </td>
+                                                <td style={styles.td}>
+                                                    {formatAmount(row.revenue, 'USD')}
+                                                </td>
+                                                <td style={styles.td}>
+                                                    {formatAmount(row.cost_of_goods_sold, 'USD')}
+                                                </td>
+                                                <td style={styles.td}>
+                                                    {formatAmount(row.gross_profit, 'USD')}
+                                                </td>
+                                                <td style={styles.td}>
+                                                    <span style={{
+                                                        color: row.cost_status === 'Costed'
+                                                            ? '#176b45'
+                                                            : '#b42318',
+                                                        fontWeight: 700
+                                                    }}>
+                                                        {row.cost_status}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </>
+                    )}
                 </div>
             )}
 
@@ -1020,14 +1303,14 @@ export default function ReportsAnalytics() {
                                 key={category.id}
                                 value={category.id}
                             >
-                                {category.name}
+                                {category.name}{category.active === false ? ' (Inactive)' : ''}
                             </option>
                         ))}
                     </select>
                 </div>
             )}
 
-            {reportType !== 'profit-loss' && (
+            {!['profit-loss', 'product-profitability'].includes(reportType) && (
                 <div style={{
                     color: '#718096',
                     fontSize: 12,
@@ -1047,7 +1330,7 @@ export default function ReportsAnalytics() {
                 </div>
             )}
 
-            {reportType !== 'profit-loss' && (
+            {!['profit-loss', 'product-profitability'].includes(reportType) && (
                 <div style={styles.tableWrap}>
                     <table style={styles.table}>
                         <thead>
@@ -1103,14 +1386,11 @@ export default function ReportsAnalytics() {
                         <tbody>
                             {loading ? (
                                 <tr>
-                                    <td
-                                        style={styles.td}
-                                        colSpan={
-                                            reportType === 'sales' ? 8 :
-                                                reportType === 'purchases' ? 9 :
-                                                    reportType === 'expenses' ? 6 : 5
-                                        }
-                                    >
+                                    <td style={styles.td} colSpan={
+                                        reportType === 'sales' ? 8 :
+                                            reportType === 'purchases' ? 9 :
+                                                reportType === 'expenses' ? 6 : 5
+                                    }>
                                         Loading records...
                                     </td>
                                 </tr>
@@ -1129,7 +1409,9 @@ export default function ReportsAnalytics() {
                                         <td style={styles.td}>
                                             {categoryName(row.category_id)}
                                         </td>
-                                        <td style={styles.td}>{row.quantity_sold}</td>
+                                        <td style={styles.td}>
+                                            {formatNumber(row.quantity_sold)}
+                                        </td>
                                         <td style={styles.td}>{row.currency_code}</td>
                                         <td style={styles.td}>
                                             {formatAmount(row.selling_price, row.currency_code)}
@@ -1151,13 +1433,13 @@ export default function ReportsAnalytics() {
                                         <td style={styles.td}>{row.purchase_date}</td>
                                         <td style={styles.td}>{row.item_name}</td>
                                         <td style={styles.td}>
-                                            {row.ordered_quantity} {row.unit}
+                                            {formatNumber(row.ordered_quantity)} {row.unit}
                                         </td>
                                         <td style={styles.td}>
-                                            {row.quantity} {row.unit}
+                                            {formatNumber(row.quantity)} {row.unit}
                                         </td>
                                         <td style={styles.td}>
-                                            {row.excess_quantity} {row.unit}
+                                            {formatNumber(row.excess_quantity)} {row.unit}
                                         </td>
                                         <td style={styles.td}>{row.currency_code}</td>
                                         <td style={styles.td}>
@@ -1199,10 +1481,12 @@ export default function ReportsAnalytics() {
                                     <tr key={`${row.sale_date}_${row.payment_method}_${row.currency_code}_${index}`}>
                                         <td style={styles.td}>{row.sale_date}</td>
                                         <td style={styles.td}>
-                                            {row.payment_method.replace('_', ' ')}
+                                            {(row.payment_method || 'other').replace(/_/g, ' ')}
                                         </td>
                                         <td style={styles.td}>{row.currency_code}</td>
-                                        <td style={styles.td}>{row.transaction_count}</td>
+                                        <td style={styles.td}>
+                                            {formatNumber(row.transaction_count)}
+                                        </td>
                                         <td style={styles.td}>
                                             {formatAmount(row.total_amount, row.currency_code)}
                                         </td>
@@ -1242,7 +1526,9 @@ export default function ReportsAnalytics() {
                                         <td style={styles.td}>{item.name}</td>
                                         <td style={styles.td}>{item.unit}</td>
                                         <td style={styles.td}>{item.currency_code}</td>
-                                        <td style={styles.td}>{item.quantity}</td>
+                                        <td style={styles.td}>
+                                            {formatNumber(item.quantity)}
+                                        </td>
                                         <td style={styles.td}>
                                             {formatAmount(item.revenue, item.currency_code)}
                                         </td>
@@ -1276,7 +1562,9 @@ export default function ReportsAnalytics() {
                                     <tr key={`${row.date}_${row.currency_code}`}>
                                         <td style={styles.td}>{row.date}</td>
                                         <td style={styles.td}>{row.currency_code}</td>
-                                        <td style={styles.td}>{row.quantity}</td>
+                                        <td style={styles.td}>
+                                            {formatNumber(row.quantity)}
+                                        </td>
                                         <td style={styles.td}>
                                             {formatAmount(row.revenue, row.currency_code)}
                                         </td>
@@ -1286,22 +1574,6 @@ export default function ReportsAnalytics() {
                         </table>
                     </div>
                 </>
-            )}
-
-            {reportType === 'profit-loss' && (
-                <div style={{
-                    ...styles.message,
-                    background: '#f3f6fa',
-                    color: '#536579',
-                    marginTop: 18
-                }}>
-                    <strong>Accounting note:</strong> Estimated operating result is
-                    calculated separately for each currency as sales revenue minus
-                    recorded purchases and operating expenses. This is not exact net
-                    profit because purchases may include stock that has not yet been
-                    used. It does not calculate the actual cost of ingredients used
-                    in menu items. Business savings deposits and withdrawals are excluded.
-                </div>
             )}
         </div>
     )
