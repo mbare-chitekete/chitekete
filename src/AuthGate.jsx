@@ -4,14 +4,27 @@ import { Utensils, LoaderCircle } from 'lucide-react'
 import { supabase } from './supabase'
 import Login from './Login'
 import App from './App'
+import PublicOrder from './PublicOrder'
 import { CurrencyProvider } from './CurrencyContext'
 
 export default function AuthGate() {
     const [session, setSession] = useState(null)
     const [loading, setLoading] = useState(true)
 
+    const isPublicOrder =
+        window.location.pathname.replace(/\/+$/, '') === '/order'
+
     useEffect(() => {
         let mounted = true
+
+        // Public customers do not need staff authentication.
+        if (isPublicOrder) {
+            setLoading(false)
+
+            return () => {
+                mounted = false
+            }
+        }
 
         const {
             data: { subscription }
@@ -50,7 +63,11 @@ export default function AuthGate() {
             mounted = false
             subscription.unsubscribe()
         }
-    }, [])
+    }, [isPublicOrder])
+
+    if (isPublicOrder) {
+        return <PublicOrder />
+    }
 
     if (loading) {
         return (
