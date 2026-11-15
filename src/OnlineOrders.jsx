@@ -126,7 +126,15 @@ function formatMoney(amount, currency = 'USD') {
         return `${currency || 'USD'} ${value.toFixed(2)}`
     }
 }
+function formatPaymentMethod(method) {
+    const labels = {
+        cash: 'Cash',
+        mobile_money: 'Mobile Money',
+        bank_card: 'Bank Card'
+    }
 
+    return labels[method] || method || 'Not recorded'
+}
 function getAvailableActions(status) {
     switch (status) {
         case 'pending':
@@ -376,6 +384,70 @@ function OrderCard({ order, onUpdateStatus, updatingId }) {
                             POS sale recorded for this order.
                         </p>
                     )}
+                    {order.order_status === 'collected' && (
+                        <div className="oo-collection-details">
+                            <h4>Payment & Collection Details</h4>
+
+                            {order.collection_sale ? (
+                                <div className="oo-collection-grid">
+                                    <div className="oo-collection-info">
+                                        <span>Receipt number</span>
+                                        <strong>
+                                            {order.collection_sale.receipt_number || 'Not recorded'}
+                                        </strong>
+                                    </div>
+
+                                    <div className="oo-collection-info">
+                                        <span>Payment method</span>
+                                        <strong>
+                                            {formatPaymentMethod(
+                                                order.collection_sale.payment_method
+                                            )}
+                                        </strong>
+                                    </div>
+
+                                    <div className="oo-collection-info">
+                                        <span>Amount received</span>
+                                        <strong>
+                                            {formatMoney(
+                                                order.collection_sale.amount_paid,
+                                                order.currency_code
+                                            )}
+                                        </strong>
+                                    </div>
+
+                                    <div className="oo-collection-info">
+                                        <span>Change given</span>
+                                        <strong>
+                                            {formatMoney(
+                                                order.collection_sale.change_amount,
+                                                order.currency_code
+                                            )}
+                                        </strong>
+                                    </div>
+
+                                    <div className="oo-collection-info">
+                                        <span>Cashier who collected</span>
+                                        <strong>
+                                            {order.collection_sale.cashier_name}
+                                        </strong>
+                                    </div>
+
+                                    <div className="oo-collection-info">
+                                        <span>POS sale reference</span>
+                                        <strong>
+                                            {order.collection_sale.id}
+                                        </strong>
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="oo-muted">
+                                    The order is marked as collected, but its linked POS
+                                    payment details could not be retrieved.
+                                </p>
+                            )}
+                        </div>
+                    )}
                 </>
             )}
 
@@ -451,7 +523,115 @@ export default function OnlineOrders() {
 
             if (queryError) throw queryError
 
-            setOrders(data || [])
+            const loadedOrders = data || []
+
+            // Collect POS sale IDs for collected orders.
+            const saleIds = [
+                ...new Set(
+                    loadedOrders
+                        .filter(order => order.order_status === 'collected' && order.sale_id)
+                        .map(order => order.sale_id)
+                )
+            ]
+
+            let salesById = {}
+            let staffById = {}
+            let employeeRolesById = {}
+
+            if (saleIds.length > 0) {
+                const { data: salesData, error: salesError } = await supabase
+                    .from('sales')
+                    .select(`
+            id,
+            receipt_number,
+            payment_method,
+            amount_paid,
+            change_amount,
+            cashier_id
+        `)
+                    .in('id', saleIds)
+
+                if (salesError) throw salesError
+
+                const sales = salesData || []
+
+                salesById = Object.fromEntries(
+                    sales.map(sale => [sale.id, sale])
+                )
+
+                // Include both sale cashier IDs and order collected_by IDs.
+                const cashierIds = [
+                    ...new Set([
+                        ...sales.map(sale => sale.cashier_id),
+                        ...loadedOrders
+                            .filter(order => order.order_status === 'collected')
+                            .map(order => order.collected_by)
+                    ].filter(Boolean))
+                ]
+
+                if (cashierIds.length > 0) {
+                    const [
+                        { data: staffData, error: staffError },
+                        { data: rolesData, error: rolesError }
+                    ] = await Promise.all([
+                        supabase
+                            .from('staff_members')
+                            .select('user_id, full_name')
+                            .in('user_id', cashierIds),
+
+                        supabase
+                            .from('employee_roles')
+                            .select('user_id, display_name')
+                            .in('user_id', cashierIds)
+                    ])
+
+                    if (staffError) throw staffError
+                    if (rolesError) throw rolesError
+
+                    staffById = Object.fromEntries(
+                        (staffData || []).map(staff => [
+                            staff.user_id,
+                            staff.full_name
+                        ])
+                    )
+
+                    employeeRolesById = Object.fromEntries(
+                        (rolesData || []).map(employee => [
+                            employee.user_id,
+                            employee.display_name
+                        ])
+                    )
+                }
+            }
+
+            // Attach the POS payment and cashier information to each order.
+            const enrichedOrders = loadedOrders.map(order => {
+                const sale = order.sale_id
+                    ? salesById[order.sale_id] || null
+                    : null
+
+                const cashierId = sale?.cashier_id || order.collected_by
+
+                const cashierName = cashierId
+                    ? (
+                        staffById[cashierId] ||
+                        employeeRolesById[cashierId] ||
+                        'Cashier account'
+                    )
+                    : 'Not recorded'
+
+                return {
+                    ...order,
+                    collection_sale: sale
+                        ? {
+                            ...sale,
+                            cashier_name: cashierName
+                        }
+                        : null
+                }
+            })
+
+            setOrders(enrichedOrders)
             setLastUpdated(new Date())
         } catch (err) {
             console.error('Online orders load error:', err)

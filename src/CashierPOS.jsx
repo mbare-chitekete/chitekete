@@ -121,6 +121,16 @@ export default function CashierPOS({ businessName }) {
     const [salesHistory, setSalesHistory] = useState([])
     const [loadingHistory, setLoadingHistory] = useState(false)
 
+    // Online-order collection
+    const [onlineOrderReference, setOnlineOrderReference] = useState('')
+    const [onlineOrderPhone, setOnlineOrderPhone] = useState('')
+    const [onlineOrder, setOnlineOrder] = useState(null)
+    const [onlineOrderItems, setOnlineOrderItems] = useState([])
+    const [onlineLookupLoading, setOnlineLookupLoading] = useState(false)
+    const [onlinePaymentMethod, setOnlinePaymentMethod] = useState('cash')
+    const [onlineAmountPaid, setOnlineAmountPaid] = useState('')
+    const onlineCheckoutRequestId = useRef(null)
+
     const [printerType, setPrinterType] = useState('bluetooth')
     const [printerDevices, setPrinterDevices] = useState([])
     const [selectedPrinterAddress, setSelectedPrinterAddress] = useState('')
@@ -1374,6 +1384,258 @@ export default function CashierPOS({ businessName }) {
     }
 
     // =========================================================
+    // ONLINE ORDER LOOKUP AND COLLECTION
+    // =========================================================
+
+    function normalizePhone(value) {
+        return String(value || '').replace(/\\D/g, '')
+    }
+
+    async function lookupOnlineOrder() {
+        if (onlineLookupLoading || processing) return
+
+        setError('')
+        setSuccessMessage('')
+
+        const reference = onlineOrderReference.trim().toUpperCase()
+
+        if (!reference) {
+            setError('Enter the online order reference.')
+            return
+        }
+
+        setOnlineLookupLoading(true)
+        setOnlineOrder(null)
+        setOnlineOrderItems([])
+        setOnlineAmountPaid('')
+        onlineCheckoutRequestId.current = null
+
+        try {
+            const { data: order, error: orderError } = await supabase
+                .from('online_orders')
+                .select(`
+                    id,
+                    order_reference,
+                    customer_name,
+                    customer_phone,
+                    order_status,
+                    payment_status,
+                    currency_code,
+                    total_amount,
+                    reservation_expires_at,
+                    expected_collection_at,
+                    sale_id
+                `)
+                .eq('order_reference', reference)
+                .maybeSingle()
+
+            if (orderError) throw orderError
+
+            if (!order) {
+                throw new Error('No online order was found with that reference.')
+            }
+
+            const suppliedPhone = normalizePhone(onlineOrderPhone)
+            if (
+                suppliedPhone &&
+                suppliedPhone !== normalizePhone(order.customer_phone)
+            ) {
+                throw new Error('The phone number does not match this online order.')
+            }
+
+            const { data: items, error: itemsError } = await supabase
+                .from('online_order_items')
+                .select(`
+                    id,
+                    item_name,
+                    item_unit,
+                    quantity,
+                    unit_price,
+                    line_total
+                `)
+                .eq('online_order_id', order.id)
+                .order('created_at', { ascending: true })
+
+            if (itemsError) throw itemsError
+
+            if (!items?.length) {
+                throw new Error('The order was found, but its saved item details are unavailable.')
+            }
+
+            setOnlineOrder(order)
+            setOnlineOrderItems(items)
+            setOnlinePaymentMethod('cash')
+            setOnlineAmountPaid(String(Number(order.total_amount || 0)))
+
+            if (
+                order.order_status !== 'ready' ||
+                order.payment_status !== 'unpaid' ||
+                order.sale_id
+            ) {
+                setError(
+                    `Order ${order.order_reference} is not available for collection. ` +
+                    `Current status: ${order.order_status || 'unknown'} / ` +
+                    `${order.payment_status || 'unknown'}.`
+                )
+            }
+        } catch (err) {
+            console.error('Online order lookup failed:', err)
+            setError(err.message || 'Could not retrieve the online order.')
+        } finally {
+            setOnlineLookupLoading(false)
+        }
+    }
+
+    async function handleOnlineOrderCollection() {
+        if (processing) return
+
+        setError('')
+        setSuccessMessage('')
+
+        if (!onlineOrder?.id || !onlineOrderItems.length) {
+            setError('Look up an online order before processing collection.')
+            return
+        }
+
+        if (
+            onlineOrder.order_status !== 'ready' ||
+            onlineOrder.payment_status !== 'unpaid' ||
+            onlineOrder.sale_id
+        ) {
+            setError('Only ready, unpaid online orders can be collected.')
+            return
+        }
+
+        const orderTotal = roundMoney(onlineOrder.total_amount)
+        const paid = Number(onlineAmountPaid)
+
+        if (!Number.isFinite(paid) || paid < orderTotal) {
+            setError('Amount received must be at least the saved online-order total.')
+            return
+        }
+
+        if (
+            onlinePaymentMethod !== 'cash' &&
+            roundMoney(paid) !== orderTotal
+        ) {
+            setError('Mobile money and bank/card payments must equal the exact order total.')
+            return
+        }
+
+        if (!onlineCheckoutRequestId.current) {
+            if (!globalThis.crypto?.randomUUID) {
+                setError('Secure checkout request IDs are unavailable on this device.')
+                return
+            }
+            onlineCheckoutRequestId.current = crypto.randomUUID()
+        }
+
+        setProcessing(true)
+
+        try {
+            const { data, error: collectionError } = await supabase.rpc(
+                'process_online_order_collection_v1',
+                {
+                    p_order_id: onlineOrder.id,
+                    p_payment_method: onlinePaymentMethod,
+                    p_amount_paid: paid,
+                    p_checkout_request_id: onlineCheckoutRequestId.current,
+                    p_notes: `Online order ${onlineOrder.order_reference}`
+                }
+            )
+
+            if (collectionError) throw collectionError
+
+            const result = Array.isArray(data) ? data[0] : data
+
+            if (!result?.sale_id || !result?.receipt_number) {
+                throw new Error(
+                    'The collection response was incomplete. Check Recent Sales and the online order before retrying.'
+                )
+            }
+
+            setLastReceipt(result)
+            setSuccessMessage(
+                `Online order ${onlineOrder.order_reference} paid and collected successfully. ` +
+                `Receipt: ${result.receipt_number}`
+            )
+
+            setOnlineOrder(previous => previous
+                ? {
+                    ...previous,
+                    order_status: 'collected',
+                    payment_status: 'paid',
+                    sale_id: result.sale_id
+                }
+                : previous
+            )
+            setOnlineAmountPaid('')
+            onlineCheckoutRequestId.current = null
+
+            await loadReceipt(result.sale_id)
+
+            // Printing is best-effort; a printer problem must not undo a saved collection.
+            if (
+                Capacitor.isNativePlatform() &&
+                printerConnected &&
+                printerHashKey
+            ) {
+                try {
+                    const {
+                        data: savedReceipt,
+                        error: receiptError
+                    } = await supabase.rpc(
+                        'cashier_get_pos_receipt_v2',
+                        { p_sale_id: result.sale_id }
+                    )
+
+                    if (receiptError) throw receiptError
+
+                    const rows = savedReceipt || []
+                    if (!rows.length) {
+                        throw new Error('Saved receipt details were not returned.')
+                    }
+
+                    const receiptText = buildReceiptPrintText(
+                        rows,
+                        {
+                            ...rows[0],
+                            receipt_number: result.receipt_number
+                        }
+                    )
+
+                    await EscPosPrinter.sendToPrinter({
+                        hashKey: printerHashKey,
+                        data: textToPrinterBytes(receiptText),
+                        waitingTime: 3000
+                    })
+
+                    setPrinterMessage(
+                        `Receipt ${result.receipt_number} printed successfully.`
+                    )
+                } catch (printError) {
+                    setPrinterError(
+                        `Collection saved, but automatic printing failed: ${printError.message}`
+                    )
+                }
+            }
+
+            await Promise.all([
+                loadMenu(),
+                loadSalesHistory()
+            ])
+        } catch (err) {
+            console.error('Online order collection failed:', err)
+            setError(
+                err.message ||
+                'Online order collection failed. Check the order and Recent Sales before retrying.'
+            )
+        } finally {
+            setProcessing(false)
+        }
+    }
+
+    // =========================================================
     // RENDER
     // =========================================================
 
@@ -2018,6 +2280,328 @@ export default function CashierPOS({ businessName }) {
                     </div>
                 )
             }
+
+            {/* ONLINE ORDER COLLECTION */}
+
+            <div
+                className="panel cashier-mobile-panel"
+                style={{
+                    padding: 20,
+                    marginTop: 20,
+                    border: '1px solid #bfdbfe'
+                }}
+            >
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: 8
+                }}>
+                    <div>
+                        <h2 style={{ margin: 0 }}>Online Order Collection</h2>
+                        <p style={{
+                            margin: '5px 0 12px',
+                            color: '#64748b',
+                            fontSize: 13
+                        }}>
+                            Find a ready online order, receive payment and complete collection.
+                        </p>
+                    </div>
+                    <span style={{
+                        padding: '6px 10px',
+                        borderRadius: 20,
+                        background: '#eff6ff',
+                        color: '#1d4ed8',
+                        fontSize: 12,
+                        fontWeight: 700
+                    }}>
+                        Saved order prices
+                    </span>
+                </div>
+
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                    gap: 10
+                }}>
+                    <label style={{
+                        display: 'grid',
+                        gap: 5,
+                        fontSize: 13,
+                        fontWeight: 700
+                    }}>
+                        Order reference
+                        <input
+                            value={onlineOrderReference}
+                            onChange={event => setOnlineOrderReference(event.target.value)}
+                            placeholder="e.g. MBC-20261115-AB12CD34"
+                            disabled={onlineLookupLoading || processing}
+                            autoComplete="off"
+                        />
+                    </label>
+
+                    <label style={{
+                        display: 'grid',
+                        gap: 5,
+                        fontSize: 13,
+                        fontWeight: 700
+                    }}>
+                        Customer phone (optional verification)
+                        <input
+                            value={onlineOrderPhone}
+                            onChange={event => setOnlineOrderPhone(event.target.value)}
+                            placeholder="Phone used when ordering"
+                            disabled={onlineLookupLoading || processing}
+                            autoComplete="tel"
+                        />
+                    </label>
+                </div>
+
+                <div style={{
+                    display: 'flex',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                    marginTop: 12
+                }}>
+                    <button
+                        type="button"
+                        className="button button-primary"
+                        onClick={lookupOnlineOrder}
+                        disabled={onlineLookupLoading || processing}
+                    >
+                        <Search size={16} />
+                        {onlineLookupLoading ? 'Searching...' : 'Find Online Order'}
+                    </button>
+
+                    <button
+                        type="button"
+                        className="button button-light"
+                        onClick={() => {
+                            setOnlineOrder(null)
+                            setOnlineOrderItems([])
+                            setOnlineOrderReference('')
+                            setOnlineOrderPhone('')
+                            setOnlineAmountPaid('')
+                            setError('')
+                            onlineCheckoutRequestId.current = null
+                        }}
+                        disabled={onlineLookupLoading || processing}
+                    >
+                        Clear
+                    </button>
+                </div>
+
+                {onlineOrder && (
+                    <div style={{
+                        marginTop: 16,
+                        padding: 14,
+                        borderRadius: 10,
+                        border: '1px solid #e2e8f0',
+                        background: '#f8fafc'
+                    }}>
+                        <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            gap: 10,
+                            flexWrap: 'wrap'
+                        }}>
+                            <div>
+                                <strong style={{ fontSize: 16 }}>
+                                    {onlineOrder.order_reference}
+                                </strong>
+                                <div style={{ fontSize: 13, color: '#475569', marginTop: 4 }}>
+                                    {onlineOrder.customer_name} · {onlineOrder.customer_phone}
+                                </div>
+                                {onlineOrder.expected_collection_at && (
+                                    <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                                        Expected collection:{' '}
+                                        {new Date(onlineOrder.expected_collection_at).toLocaleString(
+                                            'en-GB',
+                                            { timeZone: 'Africa/Harare' }
+                                        )} CAT
+                                    </div>
+                                )}
+                            </div>
+
+                            <div style={{
+                                display: 'flex',
+                                gap: 6,
+                                flexWrap: 'wrap'
+                            }}>
+                                <span style={{
+                                    padding: '5px 8px',
+                                    borderRadius: 16,
+                                    background: onlineOrder.order_status === 'ready' ? '#dcfce7' : '#fef3c7',
+                                    color: onlineOrder.order_status === 'ready' ? '#166534' : '#92400e',
+                                    fontSize: 11,
+                                    fontWeight: 800
+                                }}>
+                                    {String(onlineOrder.order_status || '').toUpperCase()}
+                                </span>
+                                <span style={{
+                                    padding: '5px 8px',
+                                    borderRadius: 16,
+                                    background: onlineOrder.payment_status === 'paid' ? '#dcfce7' : '#f1f5f9',
+                                    color: onlineOrder.payment_status === 'paid' ? '#166534' : '#475569',
+                                    fontSize: 11,
+                                    fontWeight: 800
+                                }}>
+                                    {String(onlineOrder.payment_status || '').toUpperCase()}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div style={{ marginTop: 12 }}>
+                            {onlineOrderItems.map(item => (
+                                <div
+                                    key={item.id}
+                                    style={{
+                                        display: 'grid',
+                                        gridTemplateColumns: 'minmax(0, 1fr) auto',
+                                        gap: 10,
+                                        padding: '8px 0',
+                                        borderBottom: '1px solid #e2e8f0',
+                                        fontSize: 13
+                                    }}
+                                >
+                                    <div>
+                                        <strong>{item.item_name}</strong>
+                                        <div style={{ color: '#64748b' }}>
+                                            {item.quantity} {item.item_unit || ''} × {formatMoney(
+                                                item.unit_price,
+                                                onlineOrder.currency_code || 'USD'
+                                            )}
+                                        </div>
+                                    </div>
+                                    <strong>
+                                        {formatMoney(
+                                            item.line_total,
+                                            onlineOrder.currency_code || 'USD'
+                                        )}
+                                    </strong>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: 10,
+                            marginTop: 12,
+                            fontSize: 18,
+                            fontWeight: 900
+                        }}>
+                            <span>ORDER TOTAL</span>
+                            <span>
+                                {formatMoney(
+                                    onlineOrder.total_amount,
+                                    onlineOrder.currency_code || 'USD'
+                                )}
+                            </span>
+                        </div>
+
+                        {onlineOrder.order_status === 'ready' &&
+                            onlineOrder.payment_status === 'unpaid' &&
+                            !onlineOrder.sale_id && (
+                                <>
+                                    <div style={{
+                                        display: 'flex',
+                                        gap: 8,
+                                        flexWrap: 'wrap',
+                                        marginTop: 16
+                                    }}>
+                                        {[
+                                            { value: 'cash', label: 'Cash', icon: <Banknote size={16} /> },
+                                            { value: 'mobile_money', label: 'Mobile Money', icon: <Smartphone size={16} /> },
+                                            { value: 'bank_card', label: 'Bank / Card', icon: <CreditCard size={16} /> }
+                                        ].map(method => (
+                                            <button
+                                                key={method.value}
+                                                type="button"
+                                                onClick={() => setOnlinePaymentMethod(method.value)}
+                                                disabled={processing}
+                                                style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: 6,
+                                                    padding: '10px 12px',
+                                                    borderRadius: 8,
+                                                    border: onlinePaymentMethod === method.value
+                                                        ? '2px solid #28785f'
+                                                        : '1px solid #cbd5e1',
+                                                    background: onlinePaymentMethod === method.value
+                                                        ? '#eaf3ee'
+                                                        : '#fff',
+                                                    color: onlinePaymentMethod === method.value
+                                                        ? '#176b45'
+                                                        : '#475569',
+                                                    fontWeight: 700
+                                                }}
+                                            >
+                                                {method.icon}{method.label}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <label style={{
+                                        display: 'grid',
+                                        gap: 5,
+                                        marginTop: 12,
+                                        fontSize: 13,
+                                        fontWeight: 700
+                                    }}>
+                                        Amount received ({onlineOrder.currency_code})
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            value={onlineAmountPaid}
+                                            onChange={event => setOnlineAmountPaid(event.target.value)}
+                                            disabled={processing}
+                                        />
+                                    </label>
+
+                                    <p style={{
+                                        margin: '7px 0 12px',
+                                        color: '#64748b',
+                                        fontSize: 12
+                                    }}>
+                                        Change due: {formatMoney(
+                                            Math.max(0, Number(onlineAmountPaid || 0) - Number(onlineOrder.total_amount)),
+                                            onlineOrder.currency_code || 'USD'
+                                        )}
+                                    </p>
+
+                                    <button
+                                        type="button"
+                                        className="button button-primary cashier-checkout-button"
+                                        onClick={handleOnlineOrderCollection}
+                                        disabled={processing}
+                                    >
+                                        <ReceiptText size={17} />
+                                        {processing
+                                            ? 'Processing Collection...'
+                                            : 'Confirm Payment & Collection'}
+                                    </button>
+                                </>
+                            )}
+
+                        {onlineOrder.order_status === 'collected' &&
+                            onlineOrder.payment_status === 'paid' && (
+                                <p style={{
+                                    marginTop: 12,
+                                    color: '#166534',
+                                    fontWeight: 700
+                                }}>
+                                    This order is paid and collected.
+                                    {onlineOrder.sale_id ? ' Its POS receipt is available in Recent Sales.' : ''}
+                                </p>
+                            )}
+                    </div>
+                )}
+            </div>
 
             {/* CURRENT SALE */}
 

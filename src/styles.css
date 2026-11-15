@@ -3187,3 +3187,143 @@ textarea {
         flex: 1 1 auto;
     }
 }
+
+.oo-collection-details {
+    margin-top: 18px;
+    padding: 16px;
+    border: 1px solid #bbf7d0;
+    border-radius: 10px;
+    background: #f0fdf4;
+}
+
+.oo-collection-details h4 {
+    margin: 0 0 14px;
+    color: #166534;
+    font-size: 15px;
+}
+
+.oo-collection-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.oo-collection-info {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+}
+
+.oo-collection-info span {
+    color: #64748b;
+    font-size: 12px;
+}
+
+.oo-collection-info strong {
+    color: #166534;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+    .oo-collection-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+:root {
+    /* Chitekete Bites brand colours */
+    --brand-green: #108812;
+    --brand-green-bright: #1B9E20;
+    --brand-green-dark: #086B10;
+
+    --brand-cream: #FCF8ED;
+    --brand-orange: #F49711;
+    --brand-yellow: #F8D000;
+
+    --brand-white: #FFFFFF;
+    --brand-text: #24332B;
+    --brand-muted: #82918A;
+
+    /* Interface colours */
+    --page-background: #FCF8ED;
+    --card-background: #FFFFFF;
+    --border-color: #EAE7DE;
+
+    --success: #108812;
+    --warning: #F49711;
+    --danger: #DC2626;
+
+    --button-radius: 12px;
+    --card-radius: 16px;
+}
+
+/* Main page */
+body {
+    background: var(--page-background);
+    color: var(--brand-text);
+}
+
+/* Navigation */
+.site-header {
+    background: linear-gradient(100deg,
+            var(--brand-green),
+            var(--brand-green-bright));
+    color: var(--brand-white);
+}
+
+/* Primary buttons */
+.btn-primary,
+.add-to-cart,
+.browse-menu-button {
+    background: var(--brand-green);
+    color: var(--brand-white);
+    border: none;
+    border-radius: var(--button-radius);
+}
+
+.btn-primary:hover,
+.add-to-cart:hover,
+.browse-menu-button:hover {
+    background: var(--brand-green-dark);
+}
+
+/* Promotional buttons */
+.btn-promo,
+.special-offers-button {
+    background: var(--brand-orange);
+    color: #202020;
+    border: none;
+    border-radius: var(--button-radius);
+}
+
+/* Product cards */
+.product-card {
+    background: var(--card-background);
+    border: 1px solid var(--border-color);
+    border-radius: var(--card-radius);
+}
+
+/* Category selection */
+.category-active {
+    background: var(--brand-green-bright);
+    color: var(--brand-white);
+}
+
+.category-inactive {
+    background: var(--brand-white);
+    color: var(--brand-text);
+}
+
+/* Prices */
+.product-price {
+    color: var(--brand-green);
+    font-weight: 800;
+}
+
+/* Promotional highlights */
+.promo-highlight {
+    background: var(--brand-yellow);
+    color: #202020;
+}
