@@ -275,7 +275,21 @@ export default function MenuProducts() {
             setUploading(false)
         }
     }
+    function handleCancel() {
+        if (saving || uploading) return
 
+        if (imagePreview?.startsWith('blob:')) {
+            URL.revokeObjectURL(imagePreview)
+        }
+
+        setShowForm(false)
+        setEditingId(null)
+        setForm(emptyForm)
+        setImageFile(null)
+        setImagePreview('')
+        setRemoveImage(false)
+        setError('')
+    }
     async function handleSave(e) {
         e.preventDefault()
         setSaving(true)
@@ -814,7 +828,8 @@ export default function MenuProducts() {
 
                             <button
                                 type="button"
-                                onClick={() => setShowForm(false)}
+                                onClick={handleCancel}
+                                disabled={saving || uploading}
                                 style={{
                                     border: 0,
                                     background: 'transparent',
@@ -1008,18 +1023,58 @@ export default function MenuProducts() {
                             </p>
                         )}
 
-                        <button
-                            type="button"
-                            disabled={saving || uploading}
-                            onClick={() => setShowForm(false)}
-                            style={{
-                                border: 0,
-                                background: 'transparent',
-                                cursor: 'pointer'
-                            }}
-                        >
-                            <X />
-                        </button>
+                        <div style={{
+                            display: 'flex',
+                            justifyContent: 'flex-end',
+                            gap: 12,
+                            marginTop: 8,
+                            paddingTop: 15,
+                            borderTop: '1px solid #edf0f3'
+                        }}>
+                            <button
+                                type="button"
+                                disabled={saving || uploading}
+                                onClick={handleCancel}
+                                style={{
+                                    border: '1px solid #dce3eb',
+                                    background: '#fff',
+                                    color: '#475569',
+                                    borderRadius: 9,
+                                    padding: '12px 20px',
+                                    fontWeight: 600,
+                                    cursor: saving || uploading ? 'not-allowed' : 'pointer',
+                                    opacity: saving || uploading ? 0.6 : 1
+                                }}
+                            >
+                                Cancel
+                            </button>
+
+                            <button
+                                type="submit"
+                                disabled={saving || uploading}
+                                style={{
+                                    border: 0,
+                                    background: '#28785f',
+                                    color: '#fff',
+                                    borderRadius: 9,
+                                    padding: '12px 22px',
+                                    fontWeight: 600,
+                                    cursor: saving || uploading ? 'not-allowed' : 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: 8,
+                                    opacity: saving || uploading ? 0.7 : 1
+                                }}
+                            >
+                                <Save size={17} />
+                                {saving || uploading
+                                    ? 'Saving Product...'
+                                    : editingId
+                                        ? 'Save Changes'
+                                        : 'Save Product'}
+                            </button>
+                        </div>
                     </form>
                 </div>
             )}
