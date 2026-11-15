@@ -222,7 +222,7 @@ function OrderStatus({ status }) {
 }
 
 function OrderCard({ order, onUpdateStatus, updatingId }) {
-    const [expanded, setExpanded] = useState(true)
+    const [expanded, setExpanded] = useState(false)
 
     const items = Array.isArray(order.online_order_items)
         ? [...order.online_order_items].sort((a, b) =>
@@ -251,80 +251,89 @@ function OrderCard({ order, onUpdateStatus, updatingId }) {
                     {expanded ? 'Hide details' : 'View details'}
                 </button>
             </div>
-
-            <div className="oo-customer-grid">
-                <div className="oo-info-item">
-                    <UserRound size={16} />
-                    <div>
-                        <span>Customer</span>
-                        <strong>{order.customer_name}</strong>
-                    </div>
-                </div>
-
-                <div className="oo-info-item">
-                    <Phone size={16} />
-                    <div>
-                        <span>Phone</span>
-                        <a href={`tel:${order.customer_phone}`}>
-                            {order.customer_phone}
-                        </a>
-                    </div>
-                </div>
-
-                {order.customer_email && (
-                    <div className="oo-info-item">
-                        <Mail size={16} />
-                        <div>
-                            <span>Email</span>
-                            <a href={`mailto:${order.customer_email}`}>
-                                {order.customer_email}
-                            </a>
+            {expanded && (
+                <>
+                    <div className="oo-customer-grid">
+                        <div className="oo-info-item">
+                            <UserRound size={16} />
+                            <div>
+                                <span>Customer</span>
+                                <strong>{order.customer_name}</strong>
+                            </div>
                         </div>
-                    </div>
-                )}
 
-                <div className="oo-info-item">
-                    <CalendarDays size={16} />
-                    <div>
-                        <span>Placed</span>
-                        <strong>{formatDateTime(order.placed_at || order.created_at)}</strong>
-                    </div>
-                </div>
-
-                <div className="oo-info-item">
-                    <Clock3 size={16} />
-                    <div>
-                        <span>Expected collection</span>
-                        <strong>{formatDateTime(order.expected_collection_at)}</strong>
-                    </div>
-                </div>
-
-                {order.order_status === 'pending' && order.reservation_expires_at && (
-                    <div className={`oo-info-item ${expiredReservation ? 'oo-expired-warning' : ''}`}>
-                        <AlertCircle size={16} />
-                        <div>
-                            <span>Reservation expires</span>
-                            <strong>{formatDateTime(order.reservation_expires_at)}</strong>
+                        <div className="oo-info-item">
+                            <Phone size={16} />
+                            <div>
+                                <span>Phone</span>
+                                <a href={`tel:${order.customer_phone}`}>
+                                    {order.customer_phone}
+                                </a>
+                            </div>
                         </div>
-                    </div>
-                )}
 
-                {order.order_status === 'collected' && (
-                    <div className="oo-info-item">
-                        <CheckCircle2 size={16} />
-                        <div>
-                            <span>Collected</span>
-                            <strong>{formatDateTime(order.collected_at)}</strong>
+                        {order.customer_email && (
+                            <div className="oo-info-item">
+                                <Mail size={16} />
+                                <div>
+                                    <span>Email</span>
+                                    <a href={`mailto:${order.customer_email}`}>
+                                        {order.customer_email}
+                                    </a>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="oo-info-item">
+                            <CalendarDays size={16} />
+                            <div>
+                                <span>Placed</span>
+                                <strong>
+                                    {formatDateTime(order.placed_at || order.created_at)}
+                                </strong>
+                            </div>
                         </div>
-                    </div>
-                )}
-            </div>
 
-            {expiredReservation && (
-                <div className="oo-warning">
-                    This reservation has passed its expiry time. Refresh orders to
-                    check whether the database has marked it as expired.
-                </div>
+                        <div className="oo-info-item">
+                            <Clock3 size={16} />
+                            <div>
+                                <span>Expected collection</span>
+                                <strong>
+                                    {formatDateTime(order.expected_collection_at)}
+                                </strong>
+                            </div>
+                        </div>
+
+                        {order.order_status === 'pending' && order.reservation_expires_at && (
+                            <div className={`oo-info-item ${expiredReservation ? 'oo-expired-warning' : ''}`}>
+                                <AlertCircle size={16} />
+                                <div>
+                                    <span>Reservation expires</span>
+                                    <strong>
+                                        {formatDateTime(order.reservation_expires_at)}
+                                    </strong>
+                                </div>
+                            </div>
+                        )}
+
+                        {order.order_status === 'collected' && (
+                            <div className="oo-info-item">
+                                <CheckCircle2 size={16} />
+                                <div>
+                                    <span>Collected</span>
+                                    <strong>{formatDateTime(order.collected_at)}</strong>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {expiredReservation && (
+                        <div className="oo-warning">
+                            This reservation has passed its expiry time. Refresh orders to
+                            check whether the database has marked it as expired.
+                        </div>
+                    )}
+                </>
             )}
 
             {expanded && (
