@@ -29,12 +29,32 @@ import {
 import { supabase } from './supabase'
 
 const BUSINESS_TIME_ZONE = 'Africa/Harare'
+const BRAND = {
+    primary: '#108812',
+    bright: '#1B9E20',
+    cream: '#FCF8ED',
+    orange: '#F49711',
+    yellow: '#F8D000',
+
+    dark: '#17352A',
+    text: '#263B32',
+    muted: '#718096',
+
+    lightGreen: '#E8F5E9',
+    paleGreen: '#F0F8EC',
+    border: '#EDE8DC',
+    inputBorder: '#DEDACD',
+    white: '#FFFFFF',
+
+    danger: '#C53030',
+    dangerBackground: '#FFF0F0'
+}
 
 const styles = {
     page: {
         minHeight: '100vh',
-        background: '#f5f7f9',
-        color: '#172b3a',
+        background: BRAND.cream,
+        color: BRAND.dark,
         fontFamily: 'Inter, system-ui, -apple-system, sans-serif'
     },
     container: {
@@ -51,31 +71,31 @@ const styles = {
         fontSize: 14
     },
     primary: {
-        background: '#176b50',
-        color: '#fff'
+        background: BRAND.primary,
+        color: BRAND.white
     },
     secondary: {
-        background: '#e8f2ed',
-        color: '#176b50'
+        background: BRAND.lightGreen,
+        color: BRAND.primary
     },
     muted: {
-        color: '#718096'
+        color: BRAND.muted
     },
     panel: {
-        background: '#fff',
-        border: '1px solid #e7edf0',
+        background: BRAND.white,
+        border: `1px solid ${BRAND.border}`,
         borderRadius: 16,
         padding: 18
     },
     input: {
         width: '100%',
         boxSizing: 'border-box',
-        border: '1px solid #dce4e8',
+        border: `1px solid ${BRAND.inputBorder}`,
         borderRadius: 9,
         padding: '12px 13px',
         fontSize: 14,
-        outlineColor: '#176b50',
-        background: '#fff'
+        outlineColor: BRAND.primary,
+        background: BRAND.white
     }
 }
 
@@ -197,12 +217,12 @@ const STATUS_LABELS = {
 }
 
 const STATUS_COLORS = {
-    pending: '#b7791f',
-    confirmed: '#2875bd',
-    preparing: '#805ad5',
-    ready: '#16834d',
-    collected: '#16834d',
-    cancelled: '#c53030',
+    pending: '#F49711',
+    confirmed: '#2875BD',
+    preparing: '#805AD5',
+    ready: '#1B9E20',
+    collected: '#108812',
+    cancelled: '#C53030',
     expired: '#718096'
 }
 
@@ -515,7 +535,7 @@ export default function PublicOrder() {
     }
 
     async function trackOrder(event) {
-        event.preventDefault()
+        event?.preventDefault?.()
         setTrackingError('')
         setTrackingOrder(null)
 
@@ -680,7 +700,7 @@ export default function PublicOrder() {
         <div style={styles.page}>
             {/* HEADER */}
             <header style={{
-                background: '#123d31',
+                background: 'linear-gradient(105deg, #108812 0%, #1B9E20 100%)',
                 color: '#fff',
                 padding: '15px 0'
             }}>
@@ -699,7 +719,7 @@ export default function PublicOrder() {
                         <div style={{
                             width: 43,
                             height: 43,
-                            background: '#ffffff1c',
+                            background: BRAND.cream,
                             borderRadius: 12,
                             display: 'grid',
                             placeItems: 'center'
@@ -766,7 +786,7 @@ export default function PublicOrder() {
 
             {/* BUSINESS INTRO */}
             <section style={{
-                background: '#e9f2ed',
+                background: BRAND.cream,
                 padding: '36px 0'
             }}>
                 <div style={styles.container}>
@@ -830,8 +850,8 @@ export default function PublicOrder() {
                                     onClick={shareWebsite}
                                     style={{
                                         ...styles.button,
-                                        background: '#fff',
-                                        color: '#176b50',
+                                        background: BRAND.orange,
+                                        color: '#172B20',
                                         display: 'flex',
                                         gap: 8,
                                         alignItems: 'center'
@@ -984,7 +1004,8 @@ export default function PublicOrder() {
                     <div>
                         <h2 style={{
                             fontSize: 27,
-                            margin: '0 0 6px'
+                            margin: '0 0 6px',
+                            color: BRAND.primary
                         }}>
                             Our menu
                         </h2>
@@ -1279,7 +1300,7 @@ export default function PublicOrder() {
 
             {/* FOOTER */}
             <footer style={{
-                background: '#123d31',
+                background: '#108812',
                 color: '#fff',
                 padding: '32px 0'
             }}>
@@ -1602,7 +1623,7 @@ export default function PublicOrder() {
                         </div>
 
                         <div style={{
-                            background: '#e9f2ed',
+                            background: BRAND.lightGreen,
                             borderRadius: 10,
                             padding: 13,
                             marginBottom: 18
@@ -2142,7 +2163,12 @@ export default function PublicOrder() {
                                 </div>
 
                                 <button
-                                    onClick={trackOrder}
+                                    onClick={() => {
+                                        const formEvent = {
+                                            preventDefault: () => { }
+                                        }
+                                        trackOrder(formEvent)
+                                    }}
                                     style={{
                                         ...styles.button,
                                         ...styles.secondary,
